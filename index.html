@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Traffic Simulator — NaSch Cellular Automaton</title>
+<style>
+  :root{
+    --bg:#1e1f24; --panel:#26272d; --panel2:#2d2e35; --border:#3a3b44;
+    --text:#e6e6ea; --dim:#9a9ba6; --accent:#4da3ff;
+    --good:#39c46a; --warn:#e6c54a; --bad:#e85149;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  #app{display:grid;grid-template-columns:1fr 280px;grid-template-rows:auto 1fr;
+    height:100%;gap:10px;padding:10px}
+  #canvasWrap{grid-column:1;grid-row:1;background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;padding:8px;min-width:0}
+  #canvas{display:block;width:100%;height:300px;border-radius:6px}
+  #controls{grid-column:1;grid-row:2;background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px 22px;
+    align-content:flex-start;overflow:auto}
+  #sidebar{grid-column:2;grid-row:1 / span 2;background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;padding:14px;overflow:auto}
+  h1{font-size:15px;margin:0 0 4px;font-weight:600;letter-spacing:.3px}
+  h2{font-size:13px;margin:0 0 10px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
+  .ctl{display:flex;flex-direction:column;gap:4px;min-width:130px}
+  .ctl.row{flex-direction:row;align-items:center;gap:8px;min-width:0}
+  .ctl label{font-size:12px;color:var(--dim);white-space:nowrap}
+  .ctl .val{color:var(--accent);font-variant-numeric:tabular-nums}
+  .ctl.disabled{opacity:.32;pointer-events:none}
+  select,button{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+    border-radius:6px;padding:5px 9px;font:inherit;cursor:pointer}
+  button:hover,select:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#10131a;font-weight:600}
+  input[type=range]{width:150px;accent-color:var(--accent);cursor:pointer}
+  input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
+  .metric{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+    padding:7px 9px;margin-bottom:6px;background:var(--panel2);border-radius:7px;cursor:help}
+  .metric .mlabel{font-size:12px;color:var(--dim)}
+  .metric .mval{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .metric.sub{background:none;padding:2px 9px 2px 20px;margin-bottom:2px}
+  .metric.sub .mval{font-weight:400;font-size:12px}
+  .dotA,.dotN,.dotP{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .dotA{background:#ff6a5e}.dotN{background:#c9c9d2}.dotP{background:#6ea8e8}
+  #gaugeWrap{height:10px;background:#191a1f;border-radius:5px;overflow:hidden;margin-top:6px}
+  #gaugeBar{height:100%;width:0%;background:var(--good);transition:width .4s,background .4s}
+  #spark{width:100%;height:48px;background:#191a1f;border-radius:7px;margin-top:4px}
+  .sectionGap{height:12px}
+  #scenarioDesc{font-size:11px;color:var(--dim);max-width:320px}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="canvasWrap">
+    <canvas id="canvas"></canvas>
+  </div>
+
+  <div id="controls">
+    <div class="ctl">
+      <h1>Traffic Simulator</h1>
+      <div class="ctl row">
+        <button id="btnPause" class="primary">⏸ Pause</button>
+        <button id="btnReset">↺ Reset</button>
+      </div>
+    </div>
+
+    <div class="ctl" id="cScenario">
+      <label>Scenario</label>
+      <select id="scenario">
+        <option value="highway">Highway with On-Ramp</option>
+        <option value="interchange">Highway Interchange</option>
+        <option value="city">City Arterial (Lights)</option>
+      </select>
+      <div id="scenarioDesc"></div>
+    </div>
+
+    <div class="ctl" id="cCars">
+      <label>Number of cars <span class="val" id="carsVal"></span></label>
+      <input type="range" id="cars" min="0" max="200" value="60">
+    </div>
+
+    <div class="ctl" id="cSpeed">
+      <label>Speed limit <span class="val" id="speedVal"></span></label>
+      <input type="range" id="speed" min="35" max="75" step="5" value="65">
+    </div>
+
+    <div class="ctl" id="cLanes">
+      <label>Lanes</label>
+      <select id="lanes"></select>
+    </div>
+
+    <div class="ctl" id="cTrucks">
+      <label>% Trucks <span class="val" id="trucksVal"></span></label>
+      <input type="range" id="trucks" min="0" max="30" value="10">
+    </div>
+
+    <div class="ctl" id="cAgg">
+      <label>% Aggressive drivers <span class="val" id="aggVal"></span></label>
+      <input type="range" id="pctAgg" min="0" max="50" value="15">
+    </div>
+
+    <div class="ctl" id="cPas">
+      <label>% Passive drivers <span class="val" id="pasVal"></span></label>
+      <input type="range" id="pctPas" min="0" max="50" value="15">
+    </div>
+
+    <div class="ctl" id="cMeter">
+      <label class="ctl row" style="min-width:0"><input type="checkbox" id="meterOn"> Ramp meter</label>
+      <label>Release: 1 car / <span class="val" id="meterRateVal"></span></label>
+      <input type="range" id="meterRate" min="4" max="30" value="8">
+    </div>
+
+    <div class="ctl" id="cMerge">
+      <label>Merging lane shape</label>
+      <select id="mergeShape">
+        <option value="taper">Standard taper (10 cells)</option>
+        <option value="zipper">Zipper (15 cells)</option>
+        <option value="parallel">Parallel (25 cells)</option>
+      </select>
+    </div>
+
+    <div class="ctl" id="cIncident">
+      <label class="ctl row" style="min-width:0"><input type="checkbox" id="incident"> Incident (lane closure)</label>
+    </div>
+
+    <div class="ctl" id="cCycle">
+      <label>Light cycle <span class="val" id="cycleVal"></span></label>
+      <input type="range" id="cycleLen" min="30" max="90" value="60">
+    </div>
+
+    <div class="ctl" id="cWave">
+      <label class="ctl row" style="min-width:0"><input type="checkbox" id="greenWave"> Green wave (synced lights)</label>
+    </div>
+
+    <div class="ctl" id="cWeather">
+      <label>Weather</label>
+      <select id="weather">
+        <option value="clear">Clear</option>
+        <option value="rain">Rain</option>
+        <option value="fog">Fog</option>
+      </select>
+    </div>
+  </div>
+
+  <aside id="sidebar">
+    <h2>Live Metrics</h2>
+
+    <div class="metric" title="Mean speed of all vehicles, converted from cells/tick to mph (1 cell/tick ≈ 16.8 mph).">
+      <span class="mlabel">Avg speed</span><span class="mval" id="mSpeed">–</span>
+    </div>
+    <div class="metric sub" title="Average speed of aggressive-profile drivers.">
+      <span class="mlabel"><i class="dotA"></i>Aggressive</span><span class="mval" id="mSpeedA">–</span>
+    </div>
+    <div class="metric sub" title="Average speed of normal-profile drivers.">
+      <span class="mlabel"><i class="dotN"></i>Normal</span><span class="mval" id="mSpeedN">–</span>
+    </div>
+    <div class="metric sub" title="Average speed of passive-profile drivers.">
+      <span class="mlabel"><i class="dotP"></i>Passive</span><span class="mval" id="mSpeedP">–</span>
+    </div>
+
+    <div class="metric" title="Vehicles per mile of road per lane (road is 200 cells × 7.5 m ≈ 0.93 mi).">
+      <span class="mlabel">Density</span><span class="mval" id="mDensity">–</span>
+    </div>
+
+    <div class="metric" title="Vehicles passing the sensor at cell 150, counted over the last 60 simulated seconds.">
+      <span class="mlabel">Throughput</span><span class="mval" id="mThroughput">–</span>
+    </div>
+
+    <div class="metric" style="flex-direction:column;align-items:stretch"
+         title="Congestion score: 100 × (1 − avg speed / speed limit). 0 = free flow, 100 = standstill.">
+      <span style="display:flex;justify-content:space-between">
+        <span class="mlabel">Traffic rating</span><span class="mval" id="mRating">–</span>
+      </span>
+      <div id="gaugeWrap"><div id="gaugeBar"></div></div>
+    </div>
+
+    <div class="metric" id="mQueueWrap"
+         title="Highway: vehicles waiting at the on-ramp (meter queue + acceleration lane). City: average stop events per vehicle in the last light cycle.">
+      <span class="mlabel" id="mQueueLabel">Ramp queue</span><span class="mval" id="mQueue">–</span>
+    </div>
+
+    <div class="metric" title="Lane-change maneuvers in the last 60 simulated seconds — a proxy for aggressive-driver churn.">
+      <span class="mlabel">Lane changes / min</span><span class="mval" id="mLaneCh">–</span>
+    </div>
+
+    <div class="sectionGap"></div>
+    <h2>Avg speed — last 60 s</h2>
+    <canvas id="spark" width="248" height="48"
+      title="Sparkline of average speed (mph) sampled every 0.5 s over the last 60 simulated seconds."></canvas>
+  </aside>
+</div>
+
+<script>
+'use strict';
+/*
+ * Traffic Simulator — Nagel-Schreckenberg cellular automaton.
+ *
+ * Units (fixed): 1 cell = 7.5 m (one car length); 1 tick = 1 simulated second.
+ * Speeds are integers in cells/tick; 1 cell/tick = 7.5 m/s ≈ 16.8 mph.
+ * The sim advances on a fixed 200 ms wall-clock interval; rendering runs at
+ * 60 fps via requestAnimationFrame and lerps car positions between ticks.
+ */
+
+//──────────────────────────── Constants ────────────────────────────
+const N = 200;                 // cells per lane (ring)
+const MPH_PER_CELL = 16.8;     // 1 cell/tick in mph
+const TICK_MS = 200;           // wall-clock ms per sim tick
+const SENSOR_CELL = 150;       // throughput sensor
+const INCIDENT_CELL = 100;     // lane-closure obstacle
+const EXIT_DECIDE_CELL = 20;   // where cars commit to taking the off-ramp (40 cells upstream)
+const ROAD_MILES = N * 7.5 / 1609.34;
+
+const MERGE_SHAPES = {
+  taper:    { len: 10 },   // standard acceleration taper
+  zipper:   { len: 15 },   // alternating-priority zipper (relaxed rear gap)
+  parallel: { len: 25 },   // long parallel acceleration lane
+};
+
+// Per-profile driving parameters (see spec table).
+const PROFILES = {
+  aggressive: { p: 0.08, headwayAdj: +1, gradual: false, accelEvery: 1,
+                safetyBehind: 2, cooldown: 0 },
+  normal:     { p: 0.20, headwayAdj:  0, gradual: false, accelEvery: 1,
+                safetyBehind: 3, cooldown: 3 },
+  passive:    { p: 0.35, headwayAdj: -2, gradual: true,  accelEvery: 2,
+                safetyBehind: 5, cooldown: 8 },
+};
+
+// Scenario config objects. All scenario-specific behavior keys off these
+// fields — the sim loop itself contains no scenario branching by name.
+const SCENARIOS = {
+  highway: {
+    label: 'Highway with On-Ramp',
+    desc: 'Closed 200-cell ring shown as a strip; cars wrap right → left. Metered on-ramp feeds traffic.',
+    laneOptions: [2, 3, 4], defaultLanes: 3,
+    speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
+    hasRamp: true, onRampCell: 140, hasOffRamp: false,
+    hasIncident: true, lightCells: null, style: 'highway',
+  },
+  interchange: {
+    label: 'Highway Interchange',
+    desc: 'Adds an off-ramp at cell 60 before the on-ramp at 140. Exiting cars weave right and respawn via the ramp queue.',
+    laneOptions: [2, 3, 4], defaultLanes: 3,
+    speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
+    hasRamp: true, onRampCell: 140, hasOffRamp: true, offRampCell: 60,
+    hasIncident: true, lightCells: null, style: 'highway',
+  },
+  city: {
+    label: 'City Arterial',
+    desc: 'Arterial street with signals at cells 50 / 110 / 170. Internally still a ring; cars spawn at the left edge.',
+    laneOptions: [1, 2], defaultLanes: 2,
+    speedRange: [25, 45], speedStep: 5, defaultSpeed: 35,
+    hasRamp: false, hasOffRamp: false,
+    hasIncident: false, lightCells: [50, 110, 170], style: 'city',
+  },
+};
+
+//──────────────────────────── State ────────────────────────────
+const sim = {
+  scenario: 'highway',
+  lanes: 3,            // main lanes
+  speedMph: 65,
+  targetCars: 60,
+  pctTrucks: 10, pctAgg: 15, pctPas: 15,
+  meterOn: false, meterInterval: 8, mergeShape: 'taper',
+  incident: false,
+  weather: 'clear',
+  cycleLen: 60, greenWave: false,
+  paused: false,
+
+  time: 0,             // sim ticks (= simulated seconds)
+  cars: [],
+  grid: [],            // grid[lane][cell] = car index, -1 empty, -2 incident
+  rampQueue: 0,        // cars waiting at the meter (not yet on the accel lane)
+  meterTimer: 0,
+  nextId: 1,
+  buildings: [],       // city backdrop, generated per reset
+
+  // rolling event logs (sim-time stamps) for windowed metrics
+  evThroughput: [], evLaneChanges: [], evStops: [],
+  speedHistory: [],    // sparkline samples (mph), one per metrics update
+  lastTickWall: performance.now(),
+};
+
+function cfg() { return SCENARIOS[sim.scenario]; }
+function rampLaneIdx() { return sim.lanes; }                  // accel lane sits below mainline
+function rampLen() { return MERGE_SHAPES[sim.mergeShape].len; }
+function rampStart() { return cfg().onRampCell; }
+function rampEnd() { return cfg().onRampCell + rampLen() - 1; } // last usable accel-lane cell
+function densityCap() { return Math.floor(sim.lanes * N * 0.4); }
+function effTarget() { return Math.min(sim.targetCars, densityCap()); }
+
+// Speed limit in cells/tick, reduced by 1 in rain/fog (min 1).
+function vmaxEff() {
+  let v = Math.max(1, Math.round(sim.speedMph / MPH_PER_CELL));
+  if (sim.weather !== 'clear') v = Math.max(1, v - 1);
+  return v;
+}
+// Randomization probability for a profile, +0.05 in rain/fog.
+function pEff(prof) { return prof.p + (sim.weather !== 'clear' ? 0.05 : 0); }
+
+//──────────────────────────── Traffic lights (city) ────────────────────────────
+// Cycle split scales the default 30/4/26 s proportions to the slider value.
+function lightPhases() {
+  const c = sim.cycleLen;
+  const green = Math.round(c * 0.5);
+  const yellow = Math.max(3, Math.round(c * 4 / 60));
+  return { green, yellow, red: c - green - yellow };
+}
+// Green-wave offset: time for a car at the speed limit to travel from light 0.
+function lightOffset(i) {
+  if (!sim.greenWave) return 0;
+  const cells = cfg().lightCells[i] - cfg().lightCells[0];
+  return Math.round(cells / vmaxEff()) % sim.cycleLen;
+}
+function lightState(i) {
+  const ph = lightPhases();
+  const t = ((sim.time - lightOffset(i)) % sim.cycleLen + sim.cycleLen) % sim.cycleLen;
+  if (t < ph.green) return 'green';
+  if (t < ph.green + ph.yellow) return 'yellow';
+  return 'red';
+}
+
+//──────────────────────────── Cars ────────────────────────────
+function rollProfile(isTruck) {
+  const r = Math.random() * 100;
+  let name = r < sim.pctAgg ? 'aggressive' : r < sim.pctAgg + sim.pctPas ? 'passive' : 'normal';
+  if (isTruck && name === 'aggressive') name = 'normal'; // trucks are never aggressive
+  return name;
+}
+function carColor(profName, isTruck) {
+  const h = (a, b) => a + Math.random() * (b - a);
+  if (isTruck) return `hsl(${h(20, 50)},${h(8, 18)}%,${h(60, 75)}%)`;
+  if (profName === 'aggressive') return `hsl(${h(0, 14)},${h(65, 85)}%,${h(50, 62)}%)`;
+  if (profName === 'passive')    return `hsl(${h(205, 230)},${h(32, 50)}%,${h(55, 68)}%)`;
+  return `hsl(${h(0, 360)},${h(8, 22)}%,${h(55, 80)}%)`;
+}
+// Create a car. Profile and truck status are permanent for its lifetime.
+function makeCar(lane, cell, v) {
+  const isTruck = Math.random() * 100 < sim.pctTrucks;
+  const profName = rollProfile(isTruck);
+  // Interchange: each car gets a permanent random 15–30% chance of taking the
+  // off-ramp; it rolls that chance each lap at EXIT_DECIDE_CELL, then weaves right.
+  const exitChance = cfg().hasOffRamp ? 0.15 + Math.random() * 0.15 : 0;
+  return {
+    id: sim.nextId++, lane, cell, v,
+    prevCell: cell, prevLane: lane,
+    profName, prof: PROFILES[profName], isTruck,
+    exitChance, exiting: Math.random() < exitChance,
+    cool: 0, age: 0, braking: false,
+    color: carColor(profName, isTruck),
+  };
+}
+
+//──────────────────────────── Grid & gap helpers ────────────────────────────
+function buildGrid() {
+  const rows = sim.lanes + (cfg().hasRamp ? 1 : 0);
+  sim.grid = [];
+  for (let l = 0; l < rows; l++) sim.grid.push(new Int16Array(N).fill(-1));
+  if (sim.incident && cfg().hasIncident) sim.grid[sim.lanes - 1][INCIDENT_CELL] = -2;
+  sim.cars.forEach((c, i) => { sim.grid[c.lane][c.cell] = i; });
+}
+function cellFree(lane, cell) { return sim.grid[lane][cell] === -1; }
+
+// Distance (in free cells) to the next physical obstacle ahead in a lane.
+function gapAhead(lane, cell, maxScan) {
+  for (let d = 1; d <= maxScan; d++) {
+    if (sim.grid[lane][(cell + d) % N] !== -1) return d - 1;
+  }
+  return maxScan;
+}
+// Distance to the nearest car behind a cell in a lane (for merge safety).
+function gapBehind(lane, cell, maxScan) {
+  for (let d = 1; d <= maxScan; d++) {
+    if (sim.grid[lane][(cell - d + N) % N] !== -1) return d - 1;
+  }
+  return maxScan;
+}
+
+// Effective gap for a car: physical gap, clipped by red/yellow lights and the
+// end-of-ramp wall. Lights block ALL lanes at their cell; a yellow light only
+// blocks cars that are still outside stopping distance (d > v ⇒ must stop).
+function effGap(lane, cell, v) {
+  const scan = vmaxEff() + 6;
+  let g = gapAhead(lane, cell, scan);
+  const lights = cfg().lightCells;
+  if (lights) {
+    for (const lc of lights) {
+      const d = (lc - cell + N) % N;
+      if (d >= 1 && d - 1 < g) {
+        const st = lightState(lights.indexOf(lc));
+        if (st === 'red' || (st === 'yellow' && d > v)) g = d - 1;
+      }
+    }
+  }
+  if (cfg().hasRamp && lane === rampLaneIdx()) {
+    g = Math.min(g, Math.max(0, rampEnd() - cell)); // wall at end of accel lane
+  }
+  return g;
+}
+
+//──────────────────────────── Lane changing ────────────────────────────
+// Two-step rule: (1) profile incentive, (2) safety — target cell empty and
+// rear gap in the target lane ≥ the profile's threshold. Runs as a sub-step
+// before the speed/move update so movement happens on a consistent grid.
+function tryChange(car, idx, target, requiredBehind) {
+  if (target < 0 || target > sim.lanes - 1) return false;
+  if (!cellFree(target, car.cell)) return false;
+  if (gapBehind(target, car.cell, requiredBehind + 1) < requiredBehind) return false;
+  sim.grid[car.lane][car.cell] = -1;
+  sim.grid[target][car.cell] = idx;
+  car.lane = target;
+  car.cool = car.prof.cooldown;
+  sim.evLaneChanges.push(sim.time);
+  return true;
+}
+
+function laneChangeStep() {
+  const vm = vmaxEff();
+  // Front-to-back order makes sequential application collision-safe.
+  const order = sim.cars.map((c, i) => i).sort((a, b) => sim.cars[b].cell - sim.cars[a].cell);
+  for (const idx of order) {
+    const car = sim.cars[idx];
+    if (car.cool > 0) { car.cool--; continue; }
+    const prof = car.prof;
+
+    // Ramp cars: merging left into the rightmost main lane is their only move.
+    if (cfg().hasRamp && car.lane === rampLaneIdx()) {
+      // Zipper shape models alternating priority: mainline implicitly yields,
+      // so the merging car accepts a 1-cell rear gap.
+      const behind = sim.mergeShape === 'zipper' ? 1 : prof.safetyBehind;
+      tryChange(car, idx, sim.lanes - 1, behind);
+      continue;
+    }
+    if (sim.lanes < 2) continue;
+
+    const gC = effGap(car.lane, car.cell, car.v);
+    const gapIn = (l) => l >= 0 && l < sim.lanes ? effGap(l, car.cell, car.v) : -1;
+
+    // Exiting cars (interchange) always work their way right toward the off-ramp.
+    if (car.exiting && car.lane < sim.lanes - 1) {
+      if (tryChange(car, idx, car.lane + 1, prof.safetyBehind)) continue;
+    }
+
+    if (car.profName === 'aggressive') {
+      // Changes whenever a neighboring lane is even 1 cell better; prefers left.
+      for (const t of [car.lane - 1, car.lane + 1]) {
+        if (car.exiting && t < car.lane) continue;
+        if (gapIn(t) >= gC + 1 && tryChange(car, idx, t, prof.safetyBehind)) break;
+      }
+    } else {
+      const threshold = car.profName === 'passive' ? 2 : car.v + 1; // impeded test
+      if (gC < threshold) {
+        // Normal/passive keep-right tendency: try right first, then left.
+        for (const t of [car.lane + 1, car.lane - 1]) {
+          if (car.exiting && t < car.lane) continue;
+          if (gapIn(t) > gC && tryChange(car, idx, t, prof.safetyBehind)) break;
+        }
+      } else if (!car.exiting && car.lane < sim.lanes - 1 &&
+                 gapIn(car.lane + 1) >= vm + 2 && Math.random() < 0.25) {
+        // Unforced keep-right drift when the right lane is comfortably open.
+        tryChange(car, idx, car.lane + 1, prof.safetyBehind);
+      }
+    }
+  }
+}
+
+//──────────────────────────── NaSch speed update & movement ────────────────────────────
+// Per car: accelerate → profile headway deceleration → randomize → move.
+// Parallel update: all speeds computed against pre-move positions, then all
+// cars advance, so v ≤ gap guarantees no collisions.
+function speedAndMoveStep() {
+  const vm = vmaxEff();
+  const newV = new Array(sim.cars.length);
+
+  for (let i = 0; i < sim.cars.length; i++) {
+    const car = sim.cars[i];
+    const prof = car.prof;
+    car.age++;
+    const vmaxCar = car.isTruck ? Math.min(vm, 3) : vm; // trucks capped ≈55 mph
+    const accelEvery = Math.max(prof.accelEvery, car.isTruck ? 2 : 1);
+
+    // 1. Accelerate (passive drivers & trucks only every other tick)
+    let v = car.v;
+    if (car.age % accelEvery === 0) v = Math.min(v + 1, vmaxCar);
+    v = Math.min(v, vmaxCar);
+
+    // 2. Decelerate per profile headway: v = min(v, gap + adj), where
+    //    aggressive adj=+1 (closes in), passive adj=−2 (hangs back).
+    //    Hard floor: never exceed the physical gap.
+    const g = effGap(car.lane, car.cell, v);
+    let des = Math.min(v, Math.max(0, g + prof.headwayAdj));
+    des = Math.min(des, g);
+    // Passive gradual braking: at most −1/tick unless collision-imminent.
+    if (prof.gradual && des < car.v - 1) des = Math.min(car.v - 1, g);
+
+    // 3. Randomize: slow by 1 with profile probability p (+weather penalty)
+    if (des > 0 && Math.random() < pEff(prof)) des--;
+
+    newV[i] = des;
+  }
+
+  // 4. Move all cars; detect sensor crossings, off-ramp exits, wrap despawns.
+  const remove = new Set();
+  const target = effTarget();
+  for (let i = 0; i < sim.cars.length; i++) {
+    const car = sim.cars[i];
+    car.braking = newV[i] < car.v;
+    car.prevCell = car.cell;
+    car.prevLane = car.lane;
+    car.v = newV[i];
+    car.cell = (car.cell + car.v) % N;
+
+    if (car.v > 0) {
+      const moved = car.v;
+      // Throughput sensor at cell 150
+      const dSensor = (SENSOR_CELL - car.prevCell + N) % N;
+      if (dSensor >= 1 && moved >= dSensor) sim.evThroughput.push(sim.time);
+      if (cfg().hasOffRamp) {
+        // Commit/re-roll the exit decision once per lap, upstream of the ramp.
+        const dDecide = (EXIT_DECIDE_CELL - car.prevCell + N) % N;
+        if (dDecide >= 1 && moved >= dDecide) car.exiting = Math.random() < car.exitChance;
+        // Off-ramp: an exiting car in the rightmost lane departs and respawns
+        // via the on-ramp queue; one that missed the gore point gives up.
+        const dExit = (cfg().offRampCell - car.prevCell + N) % N;
+        if (car.exiting && dExit >= 1 && moved >= dExit) {
+          if (car.lane === sim.lanes - 1) { remove.add(i); sim.rampQueue++; continue; }
+          car.exiting = false; // missed the exit — try again next lap
+        }
+      }
+      // Population control: despawn at the wrap point when over target.
+      if (car.cell < car.prevCell && sim.cars.length - remove.size > target) remove.add(i);
+    } else if (car.prevCell !== car.cell || newV[i] === 0) {
+      // Stop event (city metric): car came to a halt this tick.
+      if (car.braking && car.v === 0) sim.evStops.push(sim.time);
+    }
+  }
+  if (remove.size) sim.cars = sim.cars.filter((_, i) => !remove.has(i));
+  buildGrid();
+}
+
+//──────────────────────────── Spawning / ramp meter ────────────────────────────
+function spawnStep() {
+  const target = effTarget();
+  const pop = sim.cars.length;
+
+  if (cfg().hasRamp) {
+    // Highway: the on-ramp is the only entry. Demand accumulates in the queue.
+    if (pop + sim.rampQueue < target) sim.rampQueue++;
+    else if (pop + sim.rampQueue > target && sim.rampQueue > 0) sim.rampQueue--;
+
+    const entry = rampStart();
+    const entryFree = cellFree(rampLaneIdx(), entry);
+    if (sim.meterOn) {
+      sim.meterTimer++;
+      if (sim.meterTimer >= sim.meterInterval && sim.rampQueue > 0 && entryFree) {
+        sim.meterTimer = 0;
+        releaseRampCar(entry);
+      }
+    } else if (sim.rampQueue > 0 && entryFree) {
+      releaseRampCar(entry); // free merging: one per tick as space allows
+    }
+  } else {
+    // City: cars enter at the left edge when below target.
+    if (pop < target) {
+      const lanes = [...Array(sim.lanes).keys()];
+      for (const l of lanes.sort(() => Math.random() - 0.5)) {
+        if (cellFree(l, 0) && cellFree(l, 1) && cellFree(l, 2)) {
+          const car = makeCar(l, 0, Math.min(2, vmaxEff()));
+          sim.cars.push(car);
+          sim.grid[l][0] = sim.cars.length - 1;
+          break;
+        }
+      }
+    }
+  }
+}
+function releaseRampCar(entry) {
+  const car = makeCar(rampLaneIdx(), entry, 1); // re-rolls profile & exit chance
+  sim.cars.push(car);
+  sim.grid[rampLaneIdx()][entry] = sim.cars.length - 1;
+  sim.rampQueue--;
+}
+
+//──────────────────────────── Sim tick ────────────────────────────
+function tick() {
+  sim.time++;
+  buildGrid();
+  laneChangeStep();
+  speedAndMoveStep();
+  spawnStep();
+  // Trim rolling event logs to the last 2 minutes of sim time.
+  const cut = sim.time - 120;
+  for (const k of ['evThroughput', 'evLaneChanges', 'evStops']) {
+    sim[k] = sim[k].filter(t => t > cut);
+  }
+  sim.lastTickWall = performance.now();
+}
+
+//──────────────────────────── Reset / seeding ────────────────────────────
+// Reset rebuilds the world. The road is pre-seeded to the target population
+// (uniformly spread); afterwards all population changes flow through the
+// on-ramp / left-edge spawn and wrap-point despawn rules.
+function resetSim() {
+  sim.cars = [];
+  sim.rampQueue = 0;
+  sim.meterTimer = 0;
+  sim.time = 0;
+  sim.evThroughput = []; sim.evLaneChanges = []; sim.evStops = [];
+  sim.speedHistory = [];
+
+  const target = effTarget();
+  const perLane = Math.ceil(target / sim.lanes);
+  const used = new Set();
+  let placed = 0;
+  for (let l = 0; l < sim.lanes && placed < target; l++) {
+    const spacing = Math.max(1, Math.floor(N / perLane));
+    for (let k = 0; k < perLane && placed < target; k++) {
+      const cell = (k * spacing + Math.floor(Math.random() * Math.max(1, spacing - 1))) % N;
+      const key = l + ':' + cell;
+      if (used.has(key) || (sim.incident && cfg().hasIncident && l === sim.lanes - 1 && cell === INCIDENT_CELL)) continue;
+      used.add(key);
+      sim.cars.push(makeCar(l, cell, Math.floor(Math.random() * (vmaxEff() + 1))));
+      placed++;
+    }
+  }
+  if (cfg().style === 'city') genBuildings();
+  buildGrid();
+  sim.lastTickWall = performance.now();
+}
+
+// Deterministic pseudo-random skyline for the city backdrop.
+function genBuildings() {
+  let seed = 1337;
+  const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  sim.buildings = [];
+  for (const side of ['top', 'bottom']) {
+    let c = 0;
+    while (c < N) {
+      const w = 6 + Math.floor(rnd() * 14);
+      sim.buildings.push({
+        side, c0: c, w: Math.min(w, N - c),
+        h: 18 + rnd() * 30,
+        shade: 30 + Math.floor(rnd() * 18),
+        win: rnd() > 0.3,
+      });
+      c += w + 1;
+    }
+  }
+}
+
+//──────────────────────────── Metrics (every 500 ms) ────────────────────────────
+const $ = id => document.getElementById(id);
+function fmt(x, d = 0) { return Number.isFinite(x) ? x.toFixed(d) : '–'; }
+
+function updateMetrics() {
+  const cars = sim.cars;
+  const mph = v => v * MPH_PER_CELL;
+  const avg = arr => arr.length ? arr.reduce((a, c) => a + c.v, 0) / arr.length : NaN;
+
+  const avgAll = avg(cars);
+  $('mSpeed').textContent = cars.length ? fmt(mph(avgAll), 1) + ' mph' : '–';
+  for (const [id, name] of [['mSpeedA', 'aggressive'], ['mSpeedN', 'normal'], ['mSpeedP', 'passive']]) {
+    const grp = cars.filter(c => c.profName === name);
+    $(id).textContent = grp.length ? fmt(mph(avg(grp)), 1) + ' mph' : '–';
+  }
+
+  $('mDensity').textContent = fmt(cars.length / ROAD_MILES / sim.lanes, 1) + ' /mi/lane';
+
+  const tput = sim.evThroughput.filter(t => t > sim.time - 60).length;
+  $('mThroughput').textContent = tput + ' cars/min';
+
+  // Traffic rating: 0 (free flow) → 100 (standstill), color-coded gauge.
+  let rating = NaN;
+  if (cars.length && sim.speedMph > 0) {
+    rating = Math.max(0, Math.min(100, 100 * (1 - mph(avgAll) / sim.speedMph)));
+  }
+  $('mRating').textContent = fmt(rating, 0);
+  const bar = $('gaugeBar');
+  bar.style.width = (Number.isFinite(rating) ? rating : 0) + '%';
+  bar.style.background = rating < 33 ? 'var(--good)' : rating < 66 ? 'var(--warn)' : 'var(--bad)';
+
+  if (cfg().hasRamp) {
+    const onRamp = cars.filter(c => c.lane === rampLaneIdx()).length;
+    $('mQueueLabel').textContent = 'Ramp queue';
+    $('mQueue').textContent = (sim.rampQueue + onRamp) + ' cars';
+  } else {
+    const stops = sim.evStops.filter(t => t > sim.time - sim.cycleLen).length;
+    $('mQueueLabel').textContent = 'Stops / light cycle';
+    $('mQueue').textContent = fmt(cars.length ? stops / cars.length : NaN, 2);
+  }
+
+  $('mLaneCh').textContent = sim.evLaneChanges.filter(t => t > sim.time - 60).length + ' /min';
+
+  // Sparkline: last 120 samples (60 s at 500 ms cadence)
+  sim.speedHistory.push(Number.isFinite(avgAll) ? mph(avgAll) : 0);
+  if (sim.speedHistory.length > 120) sim.speedHistory.shift();
+  drawSpark();
+}
+
+function drawSpark() {
+  const cv = $('spark'), g = cv.getContext('2d');
+  g.clearRect(0, 0, cv.width, cv.height);
+  const data = sim.speedHistory;
+  if (data.length < 2) return;
+  const max = Math.max(sim.speedMph, ...data) * 1.05;
+  g.strokeStyle = '#4da3ff'; g.lineWidth = 1.5; g.beginPath();
+  data.forEach((v, i) => {
+    const x = i / 119 * (cv.width - 4) + 2;
+    const y = cv.height - 3 - (v / max) * (cv.height - 8);
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  });
+  g.stroke();
+  // speed-limit reference line
+  g.strokeStyle = 'rgba(230,197,74,.45)'; g.setLineDash([3, 3]); g.beginPath();
+  const yl = cv.height - 3 - (sim.speedMph / max) * (cv.height - 8);
+  g.moveTo(2, yl); g.lineTo(cv.width - 2, yl); g.stroke(); g.setLineDash([]);
+}
+
+//──────────────────────────── Rendering ────────────────────────────
+const canvas = $('canvas');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 300, dpr = 1;
+
+function resizeCanvas() {
+  dpr = window.devicePixelRatio || 1;
+  W = canvas.clientWidth;
+  H = canvas.clientHeight;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener('resize', resizeCanvas);
+
+const LANE_H = 22;
+function roadTop() { return cfg().style === 'city' ? 130 : 70; }
+function cw() { return W / N; }
+// Interpolated position in cells, handling ring wrap.
+function lerpPos(car, a) {
+  let to = car.cell;
+  if (to < car.prevCell) to += N;
+  return (car.prevCell + (to - car.prevCell) * a) % N;
+}
+
+function render() {
+  const a = sim.paused ? 1 : Math.min(1, (performance.now() - sim.lastTickWall) / TICK_MS);
+  ctx.clearRect(0, 0, W, H);
+  if (cfg().style === 'city') drawCityScene(); else drawHighwayScene();
+  drawCars(a);
+  drawWeatherOverlay();
+}
+
+//—— Highway backdrop: grass, asphalt, lane markings, ramps, incident ——
+function drawHighwayScene() {
+  const top = roadTop(), rh = sim.lanes * LANE_H, c = cw();
+  ctx.fillStyle = '#27381f'; ctx.fillRect(0, 0, W, H);             // roadside green
+  ctx.fillStyle = '#3a3b40'; ctx.fillRect(0, top, W, rh);          // asphalt
+  ctx.fillStyle = '#d8d8d8';                                       // solid shoulders
+  ctx.fillRect(0, top + 1, W, 2); ctx.fillRect(0, top + rh - 3, W, 2);
+  ctx.fillStyle = '#cfcfcf';                                       // dashed dividers
+  for (let l = 1; l < sim.lanes; l++) {
+    const y = top + l * LANE_H - 1;
+    for (let x = 0; x < W; x += 26) ctx.fillRect(x, y, 13, 2);
+  }
+
+  // Acceleration lane (on-ramp) below the rightmost lane
+  const rs = rampStart() * c, rl = rampLen() * c, ry = top + rh;
+  ctx.fillStyle = '#3a3b40';
+  ctx.beginPath();
+  ctx.moveTo(rs, ry); ctx.lineTo(rs + rl + 14, ry);
+  ctx.lineTo(rs + rl - 6, ry + LANE_H); ctx.lineTo(rs - 30, ry + LANE_H);
+  ctx.closePath(); ctx.fill();
+  // approach ramp diagonal
+  ctx.fillStyle = '#35363b';
+  ctx.beginPath();
+  ctx.moveTo(rs - 30, ry + LANE_H); ctx.lineTo(rs + 8, ry + LANE_H);
+  ctx.lineTo(rs - 18, ry + LANE_H + 64); ctx.lineTo(rs - 58, ry + LANE_H + 64);
+  ctx.closePath(); ctx.fill();
+  // queue visualization on the approach
+  const q = Math.min(sim.rampQueue, 8);
+  for (let i = 0; i < q; i++) {
+    ctx.fillStyle = '#9aa0ad';
+    ctx.fillRect(rs - 14 - i * 5, ry + LANE_H + 10 + i * 6, 9, 5);
+  }
+  if (sim.rampQueue > 8) {
+    ctx.fillStyle = '#cfd2da'; ctx.font = '11px system-ui';
+    ctx.fillText('+' + (sim.rampQueue - 8), rs - 66, ry + LANE_H + 60);
+  }
+  // ramp meter signal
+  if (sim.meterOn) {
+    const green = sim.meterTimer >= sim.meterInterval - 1;
+    ctx.fillStyle = '#222'; ctx.fillRect(rs - 8, ry + 2, 7, 16);
+    ctx.beginPath(); ctx.arc(rs - 4.5, ry + 7, 2.6, 0, 7);
+    ctx.fillStyle = green ? '#39c46a' : '#e85149'; ctx.fill();
+  }
+
+  // Off-ramp wedge (interchange)
+  if (cfg().hasOffRamp) {
+    const ox = cfg().offRampCell * c;
+    ctx.fillStyle = '#35363b';
+    ctx.beginPath();
+    ctx.moveTo(ox - 40, ry); ctx.lineTo(ox + 4, ry);
+    ctx.lineTo(ox + 44, ry + 52); ctx.lineTo(ox + 6, ry + 52);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#cfd2da'; ctx.font = '10px system-ui';
+    ctx.fillText('EXIT', ox + 14, ry + 40);
+  }
+
+  // Incident: crashed phantom car + cones in the rightmost lane at cell 100
+  if (sim.incident && cfg().hasIncident) {
+    const ix = INCIDENT_CELL * c, iy = top + (sim.lanes - 1) * LANE_H;
+    ctx.fillStyle = '#666a73';
+    ctx.fillRect(ix, iy + LANE_H * 0.28, c * 0.9, LANE_H * 0.45);
+    ctx.fillStyle = '#ff8c2e';
+    for (let k = 0; k < 3; k++) {
+      const cx2 = ix - 6 - k * 7;
+      ctx.beginPath();
+      ctx.moveTo(cx2, iy + LANE_H * 0.7); ctx.lineTo(cx2 + 5, iy + LANE_H * 0.7);
+      ctx.lineTo(cx2 + 2.5, iy + LANE_H * 0.25); ctx.closePath(); ctx.fill();
+    }
+  }
+
+  drawSensor(top, rh);
+}
+
+//—— City backdrop: buildings, sidewalks, crosswalks, signal heads ——
+function drawCityScene() {
+  const top = roadTop(), rh = sim.lanes * LANE_H, c = cw();
+  ctx.fillStyle = '#1b1c22'; ctx.fillRect(0, 0, W, H);             // night sky / ground
+  // buildings
+  for (const b of sim.buildings) {
+    const x = b.c0 * c, w = b.w * c;
+    const y = b.side === 'top' ? top - 14 - b.h : top + rh + 14;
+    ctx.fillStyle = `hsl(228,10%,${b.shade}%)`;
+    ctx.fillRect(x, y, w - 2, b.h);
+    if (b.win) {
+      ctx.fillStyle = 'rgba(255,214,120,.55)';
+      for (let wx = x + 3; wx < x + w - 6; wx += 7)
+        for (let wy = y + 4; wy < y + b.h - 5; wy += 8)
+          if ((wx * 7 + wy * 13) % 5 < 2) ctx.fillRect(wx, wy, 3, 4);
+    }
+  }
+  // sidewalks
+  ctx.fillStyle = '#55565e';
+  ctx.fillRect(0, top - 10, W, 10); ctx.fillRect(0, top + rh, W, 10);
+  // asphalt + markings
+  ctx.fillStyle = '#3a3b40'; ctx.fillRect(0, top, W, rh);
+  ctx.fillStyle = '#cfcfcf';
+  for (let l = 1; l < sim.lanes; l++) {
+    const y = top + l * LANE_H - 1;
+    for (let x = 0; x < W; x += 26) ctx.fillRect(x, y, 13, 2);
+  }
+  // crosswalks + signal heads at each light
+  cfg().lightCells.forEach((lc, i) => {
+    const x = (lc + 1) * c;
+    ctx.fillStyle = 'rgba(230,230,230,.85)';
+    for (let y = top + 2; y < top + rh - 2; y += 7) ctx.fillRect(x, y, c * 1.6, 4);
+    // stop line
+    ctx.fillStyle = '#e8e8e8'; ctx.fillRect(lc * c - 2, top, 3, rh);
+    // signal head on a pole above the road
+    const st = lightState(i);
+    const sx = lc * c - 5, sy = top - 44;
+    ctx.strokeStyle = '#202127'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(sx + 5, sy + 30); ctx.lineTo(sx + 5, top - 10); ctx.stroke();
+    ctx.fillStyle = '#16171c'; ctx.fillRect(sx, sy, 11, 30);
+    const lamps = [['red', '#e85149'], ['yellow', '#e6c54a'], ['green', '#39c46a']];
+    lamps.forEach(([name, col], k) => {
+      ctx.beginPath(); ctx.arc(sx + 5.5, sy + 6 + k * 9, 3.4, 0, 7);
+      ctx.fillStyle = st === name ? col : '#33343c'; ctx.fill();
+    });
+  });
+  drawSensor(top, rh);
+}
+
+function drawSensor(top, rh) {
+  const x = SENSOR_CELL * cw();
+  ctx.strokeStyle = 'rgba(77,163,255,.35)'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + rh); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+//—— Vehicles: profile-tinted rectangles, lerped between ticks ——
+function drawCars(a) {
+  const top = roadTop(), c = cw();
+  for (const car of sim.cars) {
+    const pos = lerpPos(car, a);
+    const laneF = car.prevLane + (car.lane - car.prevLane) * a;
+    const x = pos * c;
+    const y = top + laneF * LANE_H + LANE_H / 2;
+    const len = car.isTruck ? c * 1.15 : c * 0.85;
+    const h = car.isTruck ? LANE_H * 0.62 : LANE_H * 0.46;
+    ctx.fillStyle = car.color;
+    ctx.fillRect(x, y - h / 2, len, h);
+    if (car.braking) { ctx.fillStyle = '#ff3b30'; ctx.fillRect(x, y - h / 2, 1.6, h); }
+    if (car.exiting) { // right-turn indicator for exiting cars
+      ctx.fillStyle = '#ffb02e'; ctx.fillRect(x + len - 2, y + h / 2 - 2, 2, 2);
+    }
+  }
+}
+
+//—— Weather overlays ——
+function drawWeatherOverlay() {
+  if (sim.weather === 'rain') {
+    ctx.strokeStyle = 'rgba(160,190,230,.30)'; ctx.lineWidth = 1;
+    const t = performance.now() / 4;
+    ctx.beginPath();
+    for (let i = 0; i < 70; i++) {
+      const x = (i * 137 + t) % (W + 40) - 20;
+      const y = (i * 89 + t * 1.6) % H;
+      ctx.moveTo(x, y); ctx.lineTo(x - 3, y + 9);
+    }
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(40,55,80,.12)'; ctx.fillRect(0, 0, W, H);
+  } else if (sim.weather === 'fog') {
+    ctx.fillStyle = 'rgba(205,210,220,.34)'; ctx.fillRect(0, 0, W, H);
+  }
+}
+
+//──────────────────────────── UI wiring ────────────────────────────
+function setDisabled(id, off) { $(id).classList.toggle('disabled', off); }
+
+// Sync control availability/ranges to the active scenario.
+function syncControls() {
+  const s = cfg();
+  $('scenarioDesc').textContent = s.desc;
+
+  const sp = $('speed');
+  sp.min = s.speedRange[0]; sp.max = s.speedRange[1]; sp.step = s.speedStep;
+  sim.speedMph = Math.min(Math.max(sim.speedMph, s.speedRange[0]), s.speedRange[1]);
+  sp.value = sim.speedMph;
+
+  const ln = $('lanes');
+  ln.innerHTML = s.laneOptions.map(n => `<option value="${n}">${n}</option>`).join('');
+  if (!s.laneOptions.includes(sim.lanes)) sim.lanes = s.defaultLanes;
+  ln.value = sim.lanes;
+
+  setDisabled('cMeter', !s.hasRamp);
+  setDisabled('cMerge', !s.hasRamp);
+  setDisabled('cIncident', !s.hasIncident);
+  setDisabled('cCycle', !s.lightCells);
+  setDisabled('cWave', !s.lightCells);
+
+  updateLabels();
+}
+
+function updateLabels() {
+  $('carsVal').textContent = effTarget() + (effTarget() < sim.targetCars ? ` (cap ${densityCap()})` : '');
+  $('speedVal').textContent = sim.speedMph + ' mph';
+  $('trucksVal').textContent = sim.pctTrucks + '%';
+  $('aggVal').textContent = sim.pctAgg + '%';
+  $('pasVal').textContent = sim.pctPas + '%';
+  $('meterRateVal').textContent = sim.meterInterval + ' s';
+  $('cycleVal').textContent = sim.cycleLen + ' s';
+}
+
+function bindUI() {
+  $('scenario').addEventListener('change', e => {
+    sim.scenario = e.target.value; syncControls(); resetSim();
+  });
+  $('cars').addEventListener('input', e => { sim.targetCars = +e.target.value; updateLabels(); });
+  $('speed').addEventListener('input', e => { sim.speedMph = +e.target.value; updateLabels(); });
+  $('lanes').addEventListener('change', e => { sim.lanes = +e.target.value; updateLabels(); resetSim(); });
+  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; updateLabels(); });
+  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; updateLabels(); });
+  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; updateLabels(); });
+  $('meterOn').addEventListener('change', e => { sim.meterOn = e.target.checked; sim.meterTimer = 0; });
+  $('meterRate').addEventListener('input', e => { sim.meterInterval = +e.target.value; updateLabels(); });
+  $('mergeShape').addEventListener('change', e => { sim.mergeShape = e.target.value; resetSim(); });
+  $('incident').addEventListener('change', e => { sim.incident = e.target.checked; });
+  $('cycleLen').addEventListener('input', e => { sim.cycleLen = +e.target.value; updateLabels(); });
+  $('greenWave').addEventListener('change', e => { sim.greenWave = e.target.checked; });
+  $('weather').addEventListener('change', e => { sim.weather = e.target.value; });
+
+  $('btnPause').addEventListener('click', () => {
+    sim.paused = !sim.paused;
+    $('btnPause').textContent = sim.paused ? '▶ Play' : '⏸ Pause';
+  });
+  $('btnReset').addEventListener('click', resetSim);
+}
+
+//──────────────────────────── Loops ────────────────────────────
+function start() {
+  bindUI();
+  syncControls();
+  resizeCanvas();
+  resetSim();
+  // Fixed-interval sim tick (200 ms = 1 simulated second), independent of rendering.
+  setInterval(() => { if (!sim.paused) tick(); }, TICK_MS);
+  // Metrics refresh every 500 ms (continues while paused so UI stays live).
+  setInterval(updateMetrics, 500);
+  // 60 fps render loop with interpolation.
+  (function frame() { render(); requestAnimationFrame(frame); })();
+}
+start();
+</script>
+</body>
+</html>
