@@ -31,7 +31,8 @@
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
 
   /* ── Fullscreen canvas (engine owns geometry; bars float over it) ── */
-  #canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0}
+  #canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0;
+    touch-action:none}
 
   /* ── Edge-docked glass bars ─────────────────────────────────
      TOP bar = brand + run state + live metrics.
@@ -222,6 +223,41 @@
   .sparkCard{flex:1 1 170px;gap:5px}
   #spark{display:block;width:100%;height:34px;border-radius:5px;background:#0e1118}
 
+  /* ── Zoom controls (floating cluster, right edge) ───────── */
+  #zoomCtl{position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:9;
+    display:flex;flex-direction:column;gap:6px;align-items:center}
+  .zbtn{width:34px;height:34px;padding:0;justify-content:center;
+    font-size:17px;font-weight:600;border-radius:10px}
+  #zoomLevel{font-size:10.5px;color:var(--dim);background:var(--glass-2);
+    border:1px solid var(--glass-border);border-radius:999px;padding:2px 8px;
+    font-variant-numeric:tabular-nums;
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+
+  /* ── Vehicle inspector (opens when a car is clicked) ────── */
+  #inspector{position:fixed;left:14px;top:50%;transform:translateY(-50%);z-index:9;
+    width:236px;display:none;flex-direction:column;gap:8px;padding:12px 14px;
+    border-radius:13px;border:1px solid var(--glass-border);
+    background:linear-gradient(180deg,rgba(18,21,29,.92),rgba(13,15,21,.86));
+    backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);
+    box-shadow:0 14px 44px -18px rgba(0,0,0,.8)}
+  #inspector.show{display:flex}
+  .insHead{display:flex;align-items:center;gap:9px}
+  #insSwatch{flex:none;width:14px;height:14px;border-radius:4px;
+    border:1px solid rgba(255,255,255,.25)}
+  .insTitle{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+  .insTitle b{font-size:13px}
+  #insProf{font-size:10.5px;color:var(--faint);text-transform:capitalize}
+  .insX{margin-left:auto;flex:none;width:22px;height:22px;border:none;border-radius:6px;
+    background:transparent;color:var(--faint);font:inherit;font-size:15px;
+    cursor:pointer;line-height:1}
+  .insX:hover{background:var(--panel-3);color:var(--text)}
+  #insRows{display:flex;flex-direction:column;gap:4px;padding-top:8px;
+    border-top:1px solid var(--glass-border)}
+  .insRow{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim)}
+  .insRow b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;
+    white-space:nowrap}
+  .insHint{margin:2px 0 0;font-size:10px;color:var(--faint);line-height:1.4}
+
   /* ── Responsive / motion ────────────────────────────────── */
   @media (max-width:760px){
     .brandSub{display:none}
@@ -240,6 +276,37 @@
 <!-- Fullscreen background canvas; the engine owns its geometry and draws the
      road vertically centred, so the edge-docked bars below never cover it. -->
 <canvas id="canvas"></canvas>
+
+<!-- ── VEHICLE INSPECTOR: opens when a vehicle on the canvas is clicked ── -->
+<aside id="inspector" aria-label="Vehicle inspector">
+  <div class="insHead">
+    <span id="insSwatch" aria-hidden="true"></span>
+    <div class="insTitle">
+      <b id="insName">Car</b>
+      <span id="insProf">normal driver</span>
+    </div>
+    <button id="insClose" class="insX" title="Close" aria-label="Close inspector">×</button>
+  </div>
+  <div id="insRows">
+    <div class="insRow"><span>Speed</span><b id="insSpeed">–</b></div>
+    <div class="insRow"><span>Desired speed</span><b id="insV0">–</b></div>
+    <div class="insRow"><span>Acceleration</span><b id="insAcc">–</b></div>
+    <div class="insRow"><span>Gap ahead</span><b id="insGap">–</b></div>
+    <div class="insRow"><span>Time headway</span><b id="insHeadway">–</b></div>
+    <div class="insRow"><span>Lane</span><b id="insLane">–</b></div>
+    <div class="insRow"><span>Status</span><b id="insStatus">–</b></div>
+    <div class="insRow"><span>Time on road</span><b id="insAge">–</b></div>
+  </div>
+  <p class="insHint">Click another vehicle to switch, or empty road to dismiss.</p>
+</aside>
+
+<!-- ── ZOOM CONTROLS (scroll wheel also zooms; drag pans when zoomed) ── -->
+<div id="zoomCtl" aria-label="Zoom controls">
+  <button class="btn zbtn" id="zoomIn" title="Zoom in (or scroll up on the road)">+</button>
+  <span id="zoomLevel">1.0×</span>
+  <button class="btn zbtn" id="zoomOut" title="Zoom out (or scroll down on the road)">−</button>
+  <button class="btn zbtn" id="zoomFit" title="Reset view to the full road">⤢</button>
+</div>
 
 <!-- ── TOP BAR: brand · run state · live metrics ─────────────────── -->
 <header id="topbar" class="bar">
@@ -528,6 +595,7 @@ const sim = {
 
   time: 0,             // sim ticks (= simulated seconds)
   cars: [],
+  selected: null,      // car reference shown in the click-to-inspect panel
   rampQueue: 0,        // cars waiting at the meter (not yet on the accel lane)
   meterTimer: 0,
   nextId: 1,
@@ -1080,6 +1148,7 @@ function tick() {
 // fills from spawnStep, so the highway/interchange on-ramp behaves the same way.
 function resetSim() {
   sim.cars = [];
+  selectCar(null);
   sim.rampQueue = 0;
   sim.meterTimer = 0;
   sim.time = 0;
@@ -1267,6 +1336,27 @@ const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
 let W = 0, H = 380, dpr = 1;
 
+// Camera: zoom factor z and world-space pan origin (x, y), applied on top of
+// the dpr transform when drawing the world. z = 1 shows the entire ring road
+// (the maximum zoom-out — the full loop is always on screen at 1×); zooming
+// in magnifies about the cursor, after which the view can be dragged.
+// Screen→world: w = s / z + cam. Cost is one save/scale/translate per frame.
+const cam = { z: 1, x: 0, y: 0 };
+const ZOOM_MIN = 1, ZOOM_MAX = 6;
+function clampCam() {
+  cam.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, cam.z));
+  cam.x = Math.min(W - W / cam.z, Math.max(0, cam.x));
+  cam.y = Math.min(H - H / cam.z, Math.max(0, cam.y));
+}
+// Zoom by `factor` keeping the world point under screen (sx, sy) fixed.
+function zoomAt(sx, sy, factor) {
+  const wx = sx / cam.z + cam.x, wy = sy / cam.z + cam.y;
+  cam.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, cam.z * factor));
+  cam.x = wx - sx / cam.z;
+  cam.y = wy - sy / cam.z;
+  clampCam();
+}
+
 const scene = document.createElement('canvas');  // offscreen static scenery
 const sctx = scene.getContext('2d');
 let sceneSig = '';
@@ -1280,6 +1370,7 @@ function resizeCanvas() {
   canvas.width = W * dpr;
   canvas.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  clampCam();
 }
 window.addEventListener('resize', resizeCanvas);
 
@@ -1414,9 +1505,16 @@ function render() {
               sim.mergeShape + '|' + sim.weather + '|' + sim.buildings.length;
   if (sig !== sceneSig) { sceneSig = sig; buildScene(); }
   ctx.clearRect(0, 0, W, H);
+  // World pass under the camera transform: static blit, dynamic scenery,
+  // vehicles, selection highlight. Weather stays screen-space on top.
+  ctx.save();
+  ctx.scale(cam.z, cam.z);
+  ctx.translate(-cam.x, -cam.y);
   ctx.drawImage(scene, 0, 0, W, H);
   if (cfg().style === 'city') drawCityScene(); else drawHighwayScene();
   drawCars(a);
+  drawSelection();
+  ctx.restore();
   drawWeatherOverlay();
 }
 
@@ -1875,9 +1973,31 @@ function drawCars(a) {
     const x = pos * c;
     const y = top + laneF * LANE_H + LANE_H / 2;
     // len = body length in px along travel; trucks longer than cars.
-    if (car.isTruck) drawTruck(car, x, y, c * 1.15, blink);
-    else drawCar(car, x, y, c * 0.9, blink);
+    const len = car.isTruck ? c * 1.15 : c * 0.9;
+    // World-space footprint of this frame's draw, kept for click hit-testing
+    // and the selection highlight.
+    car.drawX = x; car.drawY = y; car.drawLen = len;
+    if (car.isTruck) drawTruck(car, x, y, len, blink);
+    else drawCar(car, x, y, len, blink);
   }
+}
+
+// Pulsing ring around the clicked vehicle, drawn in world space so it tracks
+// the car through lane changes and zoom. Line width compensates for zoom so
+// the ring stays a consistent on-screen weight.
+function drawSelection() {
+  const car = sim.selected;
+  if (!car || car.drawX === undefined || !sim.cars.includes(car)) return;
+  const h = LANE_H * 0.8, pad = 3;
+  const pulse = 0.55 + 0.30 * Math.sin(performance.now() / 240);
+  ctx.lineWidth = 1.4 / cam.z + 0.8;
+  ctx.strokeStyle = `rgba(88,166,255,${pulse.toFixed(3)})`;
+  ctx.strokeRect(car.drawX - pad, car.drawY - h / 2 - pad,
+                 car.drawLen + pad * 2, h + pad * 2);
+  ctx.lineWidth = (1.4 / cam.z + 0.8) * 3;
+  ctx.strokeStyle = 'rgba(88,166,255,.14)';
+  ctx.strokeRect(car.drawX - pad, car.drawY - h / 2 - pad,
+                 car.drawLen + pad * 2, h + pad * 2);
 }
 
 // Rear (taillights / brake glow) + front (headlights) + exit indicators,
@@ -1923,11 +2043,14 @@ function drawCar(car, x, y, len, blink) {
   // Width derived from len so the car is always clearly longer than wide
   // (~2.2:1), clamped to fit the lane.
   const h = Math.min(len * 0.46, LANE_H * 0.8), yt = y - h / 2;
+  // Detail gates use the ON-SCREEN size, so zooming in reveals wheels,
+  // glass and mirrors even when the world-space body is small.
+  const lod = len * cam.z;
 
   ctx.fillStyle = 'rgba(0,0,0,.32)';                   // soft drop shadow
   rr(ctx, x + 0.7, yt + 1.8, len, h, h * 0.32);
 
-  if (len > 7) {                                       // tire tops at 4 corners
+  if (lod > 7) {                                       // tire tops at 4 corners
     ctx.fillStyle = '#16171c';
     const ww = Math.max(1.6, len * 0.16), wh = Math.max(1.2, h * 0.13);
     const rearX = x + len * 0.13, frontX = x + len * 0.70;
@@ -1941,7 +2064,7 @@ function drawCar(car, x, y, len, blink) {
   carBody(ctx, x, yt, len, h);
   ctx.fill();
 
-  if (len > 9) {                                       // greenhouse: roof + 2 windows
+  if (lod > 9) {                                       // greenhouse: roof + 2 windows
     const gx = x + len * 0.30, gw = len * 0.40;        // glass band region
     const gInset = h * 0.18;
     ctx.fillStyle = 'rgba(18,28,46,.80)';              // windshield (forward)
@@ -1950,19 +2073,19 @@ function drawCar(car, x, y, len, blink) {
     ctx.fillStyle = 'rgba(150,180,210,.16)';           // subtle glass glint
     rr(ctx, gx + gw * 0.58, yt + gInset, gw * 0.42, Math.max(1, h * 0.22), 1);
     rr(ctx, gx, yt + gInset, gw * 0.34, Math.max(1, h * 0.22), 1);
-  } else if (len > 5) {                                 // small: single glass cabin
+  } else if (lod > 5) {                                 // small: single glass cabin
     ctx.fillStyle = 'rgba(18,28,46,.78)';
     rr(ctx, x + len * 0.40, yt + h * 0.18, len * 0.34, h * 0.64, 1.2);
   }
 
-  if (len > 9) {                                       // side mirror nubs (front)
+  if (lod > 9) {                                       // side mirror nubs (front)
     ctx.fillStyle = car.color;
     const mx = x + len * 0.66, mw = Math.max(1, len * 0.07), mh = Math.max(1, h * 0.12);
     ctx.fillRect(mx, yt - mh, mw, mh);
     ctx.fillRect(mx, yt + h, mw, mh);
   }
 
-  if (len > 6) {                                       // glossy centerline roof sheen
+  if (lod > 6) {                                       // glossy centerline roof sheen
     ctx.fillStyle = 'rgba(255,255,255,.16)';
     ctx.fillRect(x + len * 0.10, yt + h * 0.5 - 0.7, len * 0.55, 1.4);
   }
@@ -1973,11 +2096,12 @@ function drawCar(car, x, y, len, blink) {
 function drawTruck(car, x, y, len, blink) {
   // Long and comparatively narrow from above (~3:1), clamped to the lane.
   const h = Math.min(len * 0.34, LANE_H * 0.8), yt = y - h / 2;
+  const lod = len * cam.z;                             // on-screen size gates detail
 
   ctx.fillStyle = 'rgba(0,0,0,.34)';                   // soft drop shadow
   rr(ctx, x + 0.7, yt + 1.9, len, h, h * 0.28);
 
-  if (len < 7) {                                       // too small for cab/trailer
+  if (lod < 7) {                                       // too small for cab/trailer
     ctx.fillStyle = car.color;
     rr(ctx, x, yt, len, h, 1.5);
     drawVehicleLights(car, x, len, yt, h, blink);
@@ -1987,7 +2111,7 @@ function drawTruck(car, x, y, len, blink) {
   const gap = Math.max(0.8, len * 0.04);
   const trLen = len - cabLen - gap;                    // trailer + visible gap
 
-  if (len > 9) {                                       // tandem trailer + cab wheels
+  if (lod > 9) {                                       // tandem trailer + cab wheels
     ctx.fillStyle = '#16171c';
     const wh = Math.max(1.2, h * 0.16);
     ctx.fillRect(x + 1.0, yt - wh * 0.5, 1.8, wh);
@@ -2009,7 +2133,7 @@ function drawTruck(car, x, y, len, blink) {
   const cabX = x + trLen + gap;
   carBody(ctx, cabX, yt + h * 0.05, cabLen, h * 0.90);
   ctx.fill();
-  if (len > 11) {                                      // cab windshield band
+  if (lod > 11) {                                      // cab windshield band
     ctx.fillStyle = 'rgba(18,28,46,.82)';
     ctx.fillRect(cabX + cabLen * 0.46, yt + h * 0.16,
                  Math.max(1, cabLen * 0.3), h * 0.66);
@@ -2061,6 +2185,118 @@ function drawWeatherOverlay() {
     }
   }
 }
+
+//──────────────────────────── Camera & vehicle inspector ────────────────────────────
+// Scroll wheel zooms about the cursor; dragging pans when zoomed in; a plain
+// click (≤4 px of travel) selects the vehicle under the cursor and opens the
+// inspector. All of it is cheap: a hit test is one O(n) scan on click, and
+// the camera adds a single transform per frame.
+
+function canvasPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+
+// Vehicle under screen point (sx, sy), or null. Uses the footprint recorded
+// by drawCars; the pad shrinks with zoom so picking stays ~finger-sized on
+// screen without grabbing the whole lane when zoomed out.
+function pickCar(sx, sy) {
+  const wx = sx / cam.z + cam.x, wy = sy / cam.z + cam.y;
+  const pad = 6 / cam.z + 2;
+  let best = null, bestD = Infinity;
+  for (const car of sim.cars) {
+    if (car.drawX === undefined) continue;
+    const cx = car.drawX + car.drawLen / 2, cy = car.drawY;
+    if (Math.abs(wx - cx) > car.drawLen / 2 + pad ||
+        Math.abs(wy - cy) > LANE_H / 2 + 2) continue;
+    const d = (wx - cx) ** 2 + (wy - cy) ** 2;
+    if (d < bestD) { bestD = d; best = car; }
+  }
+  return best;
+}
+
+function selectCar(car) {
+  sim.selected = car || null;
+  $('inspector').classList.toggle('show', !!car);
+  if (!car) return;
+  $('insSwatch').style.background = car.color;
+  $('insName').textContent = (car.isTruck ? 'Truck' : 'Car') + ' #' + car.id;
+  $('insProf').textContent = car.profName + ' driver' + (car.isTruck ? ' · truck' : '');
+  updateInspector();
+}
+
+// Refresh the panel readouts; deselects automatically once the car leaves the
+// road. Runs on a 200 ms interval (one sim tick) — fast enough to feel live.
+function updateInspector() {
+  const car = sim.selected;
+  if (!car) return;
+  if (!sim.cars.includes(car)) { selectCar(null); return; }
+  const toMph = v => v * MPH_PER_CELL;
+  $('insSpeed').textContent = fmt(toMph(car.v), 1) + ' mph';
+  $('insV0').textContent = fmt(toMph(carV0(car)), 0) + ' mph';
+  $('insAcc').textContent = fmt((car.accel || 0) * 7.5, 2) + ' m/s²';
+  const lead = leaderInLane(car, car.lane, N);
+  $('insGap').textContent = lead.lead ? fmt(lead.gap * 7.5, 0) + ' m' : 'open road';
+  $('insHeadway').textContent =
+    lead.lead && car.v > 0.05 ? fmt(lead.gap / car.v, 1) + ' s' : '–';
+  $('insLane').textContent =
+    cfg().hasRamp && car.lane === rampLaneIdx() ? 'On-ramp' : 'Lane ' + (car.lane + 1);
+  let st = car.braking ? 'Braking'
+         : car.v < 0.05 ? 'Stopped'
+         : (car.accel || 0) > 0.05 ? 'Accelerating' : 'Cruising';
+  if (car.exiting) st += ' · exiting';
+  $('insStatus').textContent = st;
+  $('insAge').textContent = car.age + ' s';
+}
+
+function updateZoomUI() {
+  $('zoomLevel').textContent = cam.z.toFixed(1) + '×';
+  canvas.style.cursor = cam.z > 1.001 ? 'grab' : '';
+}
+
+// One pointer-drag state machine distinguishes click (select) from pan.
+let drag = null;
+canvas.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  drag = { sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, panned: false };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const dx = e.clientX - drag.lx, dy = e.clientY - drag.ly;
+  drag.lx = e.clientX; drag.ly = e.clientY;
+  if (!drag.panned &&
+      Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+  drag.panned = true;
+  if (cam.z > 1.001) {
+    cam.x -= dx / cam.z;
+    cam.y -= dy / cam.z;
+    clampCam();
+    canvas.style.cursor = 'grabbing';
+  }
+});
+canvas.addEventListener('pointerup', e => {
+  if (!drag) return;
+  const wasPan = drag.panned;
+  drag = null;
+  updateZoomUI();                       // restore grab/default cursor
+  if (wasPan) return;
+  const p = canvasPos(e);
+  selectCar(pickCar(p.x, p.y));
+});
+canvas.addEventListener('pointercancel', () => { drag = null; updateZoomUI(); });
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const p = canvasPos(e);
+  zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0014));
+  updateZoomUI();
+}, { passive: false });
+
+$('zoomIn').addEventListener('click', () => { zoomAt(W / 2, H / 2, 1.35); updateZoomUI(); });
+$('zoomOut').addEventListener('click', () => { zoomAt(W / 2, H / 2, 1 / 1.35); updateZoomUI(); });
+$('zoomFit').addEventListener('click', () => { cam.z = 1; cam.x = cam.y = 0; updateZoomUI(); });
+$('insClose').addEventListener('click', () => selectCar(null));
 
 //──────────────────────────── UI wiring ────────────────────────────
 function setDisabled(id, off) { $(id).classList.toggle('disabled', off); }
@@ -2182,6 +2418,8 @@ function start() {
   setInterval(() => { if (!sim.paused) tick(); }, TICK_MS);
   // Metrics refresh every 500 ms (continues while paused so UI stays live).
   setInterval(updateMetrics, 500);
+  // Inspector refresh once per sim tick; cheap no-op when nothing is selected.
+  setInterval(updateInspector, 200);
   // 60 fps render loop with interpolation.
   (function frame() { render(); requestAnimationFrame(frame); })();
 }
