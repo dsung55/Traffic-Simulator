@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Traffic Simulator — NaSch Cellular Automaton</title>
+<title>Traffic Simulator — IDM + MOBIL Microsimulation</title>
 <style>
   :root{
     --bg:#0c0e13; --bg-glow:rgba(64,118,255,.07);
@@ -17,34 +17,56 @@
     --r-sm:8px; --r-md:12px; --r-lg:16px;
     --shadow:0 1px 2px rgba(0,0,0,.45),0 12px 32px -18px rgba(0,0,0,.65);
     --ring:0 0 0 3px rgba(88,166,255,.35);
+    /* translucent surfaces used by the edge-docked glass bars */
+    --glass-border:rgba(120,134,168,.20);
+    --glass-2:rgba(26,30,41,.58);
+    --glass-3:rgba(34,39,54,.62);
   }
   *{box-sizing:border-box}
   html{height:100%}
-  body{margin:0;min-height:100%;color:var(--text);
-    background:var(--bg)
-      radial-gradient(900px 420px at 18% -8%, var(--bg-glow), transparent 65%) no-repeat fixed;
+  body{margin:0;height:100%;overflow:hidden;color:var(--text);background:var(--bg);
     font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
     -webkit-font-smoothing:antialiased}
   ::selection{background:rgba(88,166,255,.35)}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
 
-  /* ── Layout ─────────────────────────────────────────────── */
-  #app{display:grid;grid-template-columns:minmax(0,1fr) 304px;grid-template-rows:auto auto auto;
-    gap:14px;padding:16px 18px 22px;max-width:1320px;margin:0 auto}
-  #topbar{grid-column:1 / -1}
-  #canvasWrap{grid-column:1;grid-row:2}
-  #controls{grid-column:1;grid-row:3}
-  #sidebar{grid-column:2;grid-row:2 / span 2}
+  /* ── Fullscreen canvas (engine owns geometry; bars float over it) ── */
+  #canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0}
 
-  /* ── Header ─────────────────────────────────────────────── */
-  #topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
-  .brand{display:flex;align-items:center;gap:12px}
+  /* ── Edge-docked glass bars ─────────────────────────────────
+     TOP bar = brand + run state + live metrics.
+     BOTTOM bar = the input controls.
+     Each bar hugs its viewport edge so the centred road band between
+     them stays clear; both wrap and cap their height on small screens. */
+  .bar{position:fixed;left:0;right:0;z-index:10;
+    background:linear-gradient(180deg,rgba(18,21,29,.88),rgba(13,15,21,.80));
+    backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);}
+  #topbar{top:0;border-bottom:1px solid var(--glass-border);
+    box-shadow:0 10px 36px -16px rgba(0,0,0,.75);
+    display:flex;align-items:center;gap:12px 22px;flex-wrap:wrap;
+    padding:9px 20px;max-height:46vh;overflow-y:auto}
+  #bottombar{bottom:0;border-top:1px solid var(--glass-border);
+    box-shadow:0 -10px 36px -16px rgba(0,0,0,.75);
+    padding:12px 20px 14px;max-height:48vh;overflow-y:auto}
+
+  /* Subtle scrollbars for either bar when it overflows on small screens */
+  .bar::-webkit-scrollbar{width:8px;height:8px}
+  .bar::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:8px}
+  .bar::-webkit-scrollbar-track{background:transparent}
+
+  /* small uppercase caption shared by control groups + metric blocks */
+  .barTitle{margin:0;font-size:9.5px;font-weight:700;color:var(--faint);
+    text-transform:uppercase;letter-spacing:1.5px;white-space:nowrap}
+
+  /* ── Header (top bar) ───────────────────────────────────── */
+  .brand{flex:none;display:flex;align-items:center;gap:12px;padding-right:6px;
+    border-right:1px solid var(--glass-border)}
   .logo{flex:none;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;
     background:var(--accent-grad);color:#0a1018;
     box-shadow:0 2px 10px -2px rgba(88,166,255,.55)}
-  h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px;line-height:1.2}
-  .brandSub{font-size:11.5px;color:var(--faint);letter-spacing:.3px}
-  .topActions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px;line-height:1.2}
+  .brandSub{font-size:11px;color:var(--faint);letter-spacing:.3px}
+  .topActions{flex:none;margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 
   .chip{display:inline-flex;align-items:center;gap:8px;padding:6px 13px;border-radius:999px;
     background:var(--panel-2);border:1px solid var(--border);font-size:12px;color:var(--dim);
@@ -70,20 +92,18 @@
   .btn.primary.paused{background:linear-gradient(90deg,#3ecf6e,#37dca6);
     box-shadow:0 2px 12px -3px rgba(62,207,110,.5)}
 
-  /* ── Canvas card ────────────────────────────────────────── */
-  #canvasWrap{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-lg);
-    padding:8px;min-width:0;box-shadow:var(--shadow)}
-  #canvas{display:block;width:100%;height:380px;border-radius:10px}
-
-  /* ── Controls ───────────────────────────────────────────── */
-  #controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(212px,1fr));gap:12px;
-    align-items:stretch;min-width:0}
-  .group{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-md);
-    padding:13px 15px 15px;display:flex;flex-direction:column;gap:13px;box-shadow:var(--shadow)}
-  .group>h3{margin:0;font-size:10.5px;font-weight:700;color:var(--faint);
-    text-transform:uppercase;letter-spacing:1.4px}
-  .hint{margin:-4px 0 0;font-size:11px;color:var(--faint)}
-  #scenarioDesc{margin:0;font-size:11.5px;line-height:1.5;color:var(--dim)}
+  /* ── Controls (the entire bottom bar) ───────────────────── */
+  /* Groups tile across the bar and wrap onto extra rows on narrow widths. */
+  #controls{display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+    gap:14px 20px;align-items:start}
+  .group{display:flex;flex-direction:column;gap:10px;min-width:0;
+    padding-left:16px;border-left:1px solid var(--glass-border)}
+  .group:first-child{padding-left:0;border-left:none}
+  .group>h3{margin:0 0 1px;font-size:9.5px;font-weight:700;color:var(--faint);
+    text-transform:uppercase;letter-spacing:1.5px}
+  .hint{margin:-3px 0 0;font-size:10.5px;color:var(--faint)}
+  #scenarioDesc{margin:0;font-size:11px;line-height:1.45;color:var(--dim)}
 
   .ctl{display:flex;flex-direction:column;gap:7px;min-width:0}
   .ctl>label{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--dim);
@@ -151,62 +171,64 @@
   .toggle input:checked+.tg::after{transform:translateX(16px);background:#fff}
   .toggle input:focus-visible+.tg{box-shadow:var(--ring)}
 
-  /* ── Sidebar / metrics ──────────────────────────────────── */
-  #sidebar{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-lg);
-    padding:15px;display:flex;flex-direction:column;gap:10px;min-width:0;
-    box-shadow:var(--shadow);align-self:start}
-  h2{margin:0 0 2px;font-size:10.5px;font-weight:700;color:var(--faint);
-    text-transform:uppercase;letter-spacing:1.4px}
-  .card{background:var(--panel-2);border:1px solid var(--border);border-radius:var(--r-sm);
-    padding:10px 12px;min-width:0}
+  /* ── Live metrics (horizontal strip in the top bar) ─────── */
+  /* The metrics read as a single inline strip of compact cards; on narrow
+     widths it wraps onto a second row within the top bar. */
+  #sidebar{flex:1 1 460px;min-width:0;
+    display:flex;align-items:stretch;flex-wrap:wrap;gap:8px 10px}
+  .card{background:var(--glass-2);border:1px solid var(--glass-border);border-radius:var(--r-sm);
+    padding:7px 11px;min-width:0;display:flex;flex-direction:column;justify-content:center}
   .card[title]{cursor:help}
-  .mlabel{font-size:10.5px;font-weight:600;color:var(--dim);
+  .mlabel{font-size:9.5px;font-weight:600;color:var(--dim);
     text-transform:uppercase;letter-spacing:.9px}
 
-  .card.hero{background:linear-gradient(180deg,var(--panel-3),var(--panel-2));
-    border-color:var(--border-2);padding:12px 14px 13px}
+  /* Hero rating: label + score + gauge in one slim card */
+  .card.hero{flex:1 1 200px;background:linear-gradient(180deg,var(--glass-3),var(--glass-2));
+    border-color:var(--border-2);padding:8px 12px;gap:2px}
   .heroTop{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
-  .heroVal{font-size:30px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;
+  .heroVal{font-size:24px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;
     transition:color .5s}
-  .heroUnit{font-size:11.5px;font-weight:500;color:var(--faint);margin-left:3px}
-  #gaugeWrap{position:relative;height:12px;margin-top:11px;border-radius:999px;
+  .heroUnit{font-size:11px;font-weight:500;color:var(--faint);margin-left:3px}
+  #gaugeWrap{position:relative;height:9px;margin-top:6px;border-radius:999px;
     background:#0e1118;border:1px solid var(--border);overflow:hidden}
   #gaugeBar{height:100%;width:0%;border-radius:999px;background:var(--good);
     transition:width .6s cubic-bezier(.22,1,.36,1),background .6s}
   #gaugeWrap::after{content:"";position:absolute;inset:0;pointer-events:none;
     background:repeating-linear-gradient(90deg,transparent 0,transparent calc(25% - 1px),
       rgba(255,255,255,.13) calc(25% - 1px),rgba(255,255,255,.13) 25%)}
-  .gaugeScale{display:flex;justify-content:space-between;margin-top:6px;
-    font-size:9.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.7px}
+  .gaugeScale{display:none}
 
-  .bigVal{display:block;margin-top:3px;font-size:23px;font-weight:700;line-height:1.15;
+  /* Avg speed card: value beside a tight profile legend */
+  .speedCard{flex:1 1 230px;flex-direction:row;align-items:center;gap:12px}
+  .speedMain{display:flex;flex-direction:column;gap:1px}
+  .bigVal{display:block;font-size:20px;font-weight:700;line-height:1.1;
     font-variant-numeric:tabular-nums}
-  .legend{display:flex;flex-direction:column;gap:4px;margin-top:9px;padding-top:9px;
-    border-top:1px dashed var(--border-2)}
-  .legend>span{display:flex;align-items:center;font-size:11.5px;color:var(--dim);cursor:help}
-  .legend b{margin-left:auto;font-weight:600;color:var(--text);
-    font-variant-numeric:tabular-nums;font-size:11.5px}
-  .dotA,.dotN,.dotP{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;
-    margin-right:7px}
+  .legend{display:flex;flex-direction:column;gap:2px;padding-left:12px;
+    border-left:1px dashed var(--border-2)}
+  .legend>span{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--dim);cursor:help}
+  .legend b{margin-left:auto;padding-left:8px;font-weight:600;color:var(--text);
+    font-variant-numeric:tabular-nums;font-size:10.5px}
+  .dotA,.dotN,.dotP{display:inline-block;flex:none;width:7px;height:7px;border-radius:50%}
   .dotA{background:#ff6a5e;box-shadow:0 0 6px rgba(255,106,94,.6)}
   .dotN{background:#c9c9d2}
   .dotP{background:#6ea8e8;box-shadow:0 0 6px rgba(110,168,232,.5)}
 
-  .miniGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .card.mini{display:flex;flex-direction:column;gap:4px;padding:9px 11px}
-  .miniVal{font-size:14.5px;font-weight:650;font-variant-numeric:tabular-nums;
+  /* Four compact stat cards */
+  .miniGrid{display:flex;flex-wrap:wrap;gap:8px}
+  .card.mini{flex:1 1 92px;gap:2px;padding:7px 11px}
+  .miniVal{font-size:14px;font-weight:650;font-variant-numeric:tabular-nums;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-  .sparkCard{display:flex;flex-direction:column;gap:8px}
-  #spark{display:block;width:100%;height:60px;border-radius:6px;background:#0e1118}
+  .sparkCard{flex:1 1 170px;gap:5px}
+  #spark{display:block;width:100%;height:34px;border-radius:5px;background:#0e1118}
 
   /* ── Responsive / motion ────────────────────────────────── */
-  @media (max-width:980px){
-    #app{grid-template-columns:1fr;padding:12px}
-    #topbar,#canvasWrap,#controls,#sidebar{grid-column:1}
-    #canvasWrap{grid-row:auto}
-    #controls{grid-row:auto}
-    #sidebar{grid-row:auto}
+  @media (max-width:760px){
+    .brandSub{display:none}
+    .brand{border-right:none;padding-right:0}
+    #topbar{gap:10px 14px;padding:8px 14px}
+    #bottombar{padding:10px 14px 12px}
+    #controls{gap:12px 14px}
   }
   @media (prefers-reduced-motion:reduce){
     *,*::before,*::after{transition-duration:.01ms!important;
@@ -215,46 +237,95 @@
 </style>
 </head>
 <body>
-<div id="app">
+<!-- Fullscreen background canvas; the engine owns its geometry and draws the
+     road vertically centred, so the edge-docked bars below never cover it. -->
+<canvas id="canvas"></canvas>
 
-  <header id="topbar">
-    <div class="brand">
-      <span class="logo" aria-hidden="true">
-        <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor"
-             stroke-width="2.1" stroke-linecap="round">
-          <path d="M6.6 2.5 4 17.5"/>
-          <path d="M13.4 2.5 16 17.5"/>
-          <path d="M10 3.4v2.4M10 8.8v2.4M10 14.2v2.4"/>
-        </svg>
-      </span>
-      <div>
-        <h1>Traffic Simulator</h1>
-        <div class="brandSub">Nagel–Schreckenberg cellular automaton</div>
-      </div>
+<!-- ── TOP BAR: brand · run state · live metrics ─────────────────── -->
+<header id="topbar" class="bar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor"
+           stroke-width="2.1" stroke-linecap="round">
+        <path d="M6.6 2.5 4 17.5"/>
+        <path d="M13.4 2.5 16 17.5"/>
+        <path d="M10 3.4v2.4M10 8.8v2.4M10 14.2v2.4"/>
+      </svg>
+    </span>
+    <div>
+      <h1>Traffic Simulator</h1>
+      <div class="brandSub">IDM + MOBIL traffic microsimulation</div>
     </div>
-    <div class="topActions">
-      <span class="chip" id="statusChip" title="Active scenario and simulation state">
-        <span class="chipDot"></span>
-        <span id="statusScenario"></span>
-        <span class="chipSep">·</span>
-        <span id="statusState">Live</span>
-      </span>
-      <button id="btnPause" class="btn primary" aria-pressed="false"></button>
-      <button id="btnReset" class="btn">
-        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
-             stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
-          <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.76"/>
-          <path d="M12.2 1.6v3h-3" stroke-linejoin="round"/>
-        </svg>
-        <span>Reset</span>
-      </button>
-    </div>
-  </header>
-
-  <div id="canvasWrap">
-    <canvas id="canvas"></canvas>
   </div>
 
+  <aside id="sidebar" aria-label="Live metrics">
+
+    <div class="card hero"
+         title="Congestion score: 100 × (1 − avg speed / speed limit). 0 = free flow, 100 = standstill.">
+      <div class="heroTop">
+        <span class="mlabel">Traffic rating</span>
+        <span class="heroVal"><span id="mRating">–</span><span class="heroUnit">/ 100</span></span>
+      </div>
+      <div id="gaugeWrap"><div id="gaugeBar"></div></div>
+      <div class="gaugeScale"><span>Free flow</span><span>Standstill</span></div>
+    </div>
+
+    <div class="card speedCard" title="Mean speed of all vehicles, converted from cells/second to mph (1 cell/s ≈ 16.8 mph).">
+      <div class="speedMain">
+        <span class="mlabel">Avg speed</span>
+        <span class="bigVal" id="mSpeed">–</span>
+      </div>
+      <div class="legend">
+        <span title="Average speed of aggressive-profile drivers."><i class="dotA"></i>Aggressive <b id="mSpeedA">–</b></span>
+        <span title="Average speed of normal-profile drivers."><i class="dotN"></i>Normal <b id="mSpeedN">–</b></span>
+        <span title="Average speed of passive-profile drivers."><i class="dotP"></i>Passive <b id="mSpeedP">–</b></span>
+      </div>
+    </div>
+
+    <div class="miniGrid">
+      <div class="card mini" title="Vehicles per mile of road per lane (road is 84 cells × 7.5 m ≈ 0.39 mi).">
+        <span class="mlabel">Density</span><span class="miniVal" id="mDensity">–</span>
+      </div>
+      <div class="card mini" title="Vehicles passing the sensor at cell 63, counted over the last 60 simulated seconds.">
+        <span class="mlabel">Throughput</span><span class="miniVal" id="mThroughput">–</span>
+      </div>
+      <div class="card mini" id="mQueueWrap"
+           title="Highway: vehicles waiting at the on-ramp (meter queue + acceleration lane). City: average stop events per vehicle in the last light cycle.">
+        <span class="mlabel" id="mQueueLabel">Ramp queue</span><span class="miniVal" id="mQueue">–</span>
+      </div>
+      <div class="card mini" title="Lane-change maneuvers in the last 60 simulated seconds — a proxy for aggressive-driver churn.">
+        <span class="mlabel">Lane changes</span><span class="miniVal" id="mLaneCh">–</span>
+      </div>
+    </div>
+
+    <div class="card sparkCard">
+      <span class="mlabel">Avg speed — last 60 s</span>
+      <canvas id="spark" width="248" height="60"
+        title="Sparkline of average speed (mph) sampled every 0.5 s over the last 60 simulated seconds."></canvas>
+    </div>
+  </aside>
+
+  <div class="topActions">
+    <span class="chip" id="statusChip" title="Active scenario and simulation state">
+      <span class="chipDot"></span>
+      <span id="statusScenario"></span>
+      <span class="chipSep">·</span>
+      <span id="statusState">Live</span>
+    </span>
+    <button id="btnPause" class="btn primary" aria-pressed="false"></button>
+    <button id="btnReset" class="btn">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+           stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+        <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.76"/>
+        <path d="M12.2 1.6v3h-3" stroke-linejoin="round"/>
+      </svg>
+      <span>Reset</span>
+    </button>
+  </div>
+</header>
+
+<!-- ── BOTTOM BAR: input controls ────────────────────────────────── -->
+<div id="bottombar" class="bar">
   <div id="controls">
 
     <section class="group">
@@ -347,115 +418,98 @@
     </section>
   </div>
 
-  <aside id="sidebar">
-    <h2>Live Metrics</h2>
-
-    <div class="card hero"
-         title="Congestion score: 100 × (1 − avg speed / speed limit). 0 = free flow, 100 = standstill.">
-      <div class="heroTop">
-        <span class="mlabel">Traffic rating</span>
-        <span class="heroVal"><span id="mRating">–</span><span class="heroUnit">/ 100</span></span>
-      </div>
-      <div id="gaugeWrap"><div id="gaugeBar"></div></div>
-      <div class="gaugeScale"><span>Free flow</span><span>Standstill</span></div>
-    </div>
-
-    <div class="card" title="Mean speed of all vehicles, converted from cells/tick to mph (1 cell/tick ≈ 16.8 mph).">
-      <span class="mlabel">Avg speed</span>
-      <span class="bigVal" id="mSpeed">–</span>
-      <div class="legend">
-        <span title="Average speed of aggressive-profile drivers."><i class="dotA"></i>Aggressive <b id="mSpeedA">–</b></span>
-        <span title="Average speed of normal-profile drivers."><i class="dotN"></i>Normal <b id="mSpeedN">–</b></span>
-        <span title="Average speed of passive-profile drivers."><i class="dotP"></i>Passive <b id="mSpeedP">–</b></span>
-      </div>
-    </div>
-
-    <div class="miniGrid">
-      <div class="card mini" title="Vehicles per mile of road per lane (road is 200 cells × 7.5 m ≈ 0.93 mi).">
-        <span class="mlabel">Density</span><span class="miniVal" id="mDensity">–</span>
-      </div>
-      <div class="card mini" title="Vehicles passing the sensor at cell 150, counted over the last 60 simulated seconds.">
-        <span class="mlabel">Throughput</span><span class="miniVal" id="mThroughput">–</span>
-      </div>
-      <div class="card mini" id="mQueueWrap"
-           title="Highway: vehicles waiting at the on-ramp (meter queue + acceleration lane). City: average stop events per vehicle in the last light cycle.">
-        <span class="mlabel" id="mQueueLabel">Ramp queue</span><span class="miniVal" id="mQueue">–</span>
-      </div>
-      <div class="card mini" title="Lane-change maneuvers in the last 60 simulated seconds — a proxy for aggressive-driver churn.">
-        <span class="mlabel">Lane changes</span><span class="miniVal" id="mLaneCh">–</span>
-      </div>
-    </div>
-
-    <div class="card sparkCard">
-      <span class="mlabel">Avg speed — last 60 s</span>
-      <canvas id="spark" width="248" height="60"
-        title="Sparkline of average speed (mph) sampled every 0.5 s over the last 60 simulated seconds."></canvas>
-    </div>
-  </aside>
 </div>
+<!-- /#bottombar -->
 
 <script>
 'use strict';
 /*
- * Traffic Simulator — Nagel-Schreckenberg cellular automaton.
+ * Traffic Simulator — continuous microsimulation (IDM + MOBIL).
  *
  * Units (fixed): 1 cell = 7.5 m (one car length); 1 tick = 1 simulated second.
- * Speeds are integers in cells/tick; 1 cell/tick = 7.5 m/s ≈ 16.8 mph.
- * The sim advances on a fixed 200 ms wall-clock interval; rendering runs at
- * 60 fps via requestAnimationFrame and lerps car positions between ticks.
+ * Positions (car.cell) and speeds (car.v, cells/second) are now FLOATS:
+ *   1 cell/s = 7.5 m/s ≈ 16.8 mph.
+ * Longitudinal motion is the Intelligent Driver Model (IDM); lane changes use
+ * MOBIL (incentive vs. politeness, with a hard safety criterion). Each tick
+ * integrates IDM over SUBSTEPS sub-steps (dt = 1/SUBSTEPS s) for stability and
+ * advances sim.time by 1 (= one simulated second). The sim advances on a fixed
+ * 200 ms wall-clock interval; rendering runs at 60 fps via requestAnimationFrame
+ * and lerps car positions between ticks.
  */
 
 //──────────────────────────── Constants ────────────────────────────
-const N = 200;                 // cells per lane (ring)
-const MPH_PER_CELL = 16.8;     // 1 cell/tick in mph
+// The world is ZOOMED IN versus the old N=200 ring: fewer cells across the
+// fullscreen canvas means each cell renders ~18–22px wide, so a ~1-cell car
+// reads as longer-than-wide rather than a squat block. Every cell-based
+// landmark below was rescaled from the old N=200 layout to this N.
+const N = 84;                  // cells per lane (≈ old 200, scaled ×0.42)
+const MPH_PER_CELL = 16.8;     // 1 cell/s in mph
 const TICK_MS = 200;           // wall-clock ms per sim tick
-const SENSOR_CELL = 150;       // throughput sensor
-const INCIDENT_CELL = 100;     // lane-closure obstacle
-const EXIT_DECIDE_CELL = 20;   // where cars commit to taking the off-ramp (40 cells upstream)
+const SUBSTEPS = 5;            // IDM integration sub-steps per tick (dt = 1/5 s)
+const SUB_DT = 1 / SUBSTEPS;
+const SENSOR_CELL = 63;        // throughput sensor (old 150)
+const INCIDENT_CELL = 42;      // lane-closure obstacle (old 100)
+const EXIT_DECIDE_CELL = 9;    // where cars commit to taking the off-ramp (old 20)
 const ROAD_MILES = N * 7.5 / 1609.34;
+const CAR_LEN = 1.0;           // physical car length in cells (used for gaps)
 
 const MERGE_SHAPES = {
-  taper:    { len: 10 },   // standard acceleration taper
-  zipper:   { len: 15 },   // alternating-priority zipper (relaxed rear gap)
-  parallel: { len: 25 },   // long parallel acceleration lane
+  taper:    { len: 5 },    // standard acceleration taper (old 10)
+  zipper:   { len: 7 },    // alternating-priority zipper, relaxed rear gap (old 15)
+  parallel: { len: 11 },   // long parallel acceleration lane (old 25)
 };
 
-// Per-profile driving parameters (see spec table).
+// Per-profile driving parameters, expressed as IDM + MOBIL knobs.
+//   v0Mult : multiplier on the posted limit for desired speed v0
+//   T      : safe time headway (s)
+//   s0     : minimum bumper-to-bumper gap (cells)
+//   a      : max acceleration (cells/s²)
+//   b      : comfortable deceleration (cells/s²)
+//   politeness : MOBIL politeness factor p (weight on neighbours' (dis)advantage)
+//   threshold  : MOBIL switching threshold Δa_th (cells/s²) — lower = changes eagerly
+//   biasRight  : keep-right bias a_bias (cells/s²) added to favour the right lane
+//   leftPref   : extra incentive (cells/s²) to favour moving left/faster
 const PROFILES = {
-  aggressive: { p: 0.08, headwayAdj: +1, gradual: false, accelEvery: 1,
-                safetyBehind: 2, cooldown: 0 },
-  normal:     { p: 0.20, headwayAdj:  0, gradual: false, accelEvery: 1,
-                safetyBehind: 3, cooldown: 3 },
-  passive:    { p: 0.35, headwayAdj: -2, gradual: true,  accelEvery: 2,
-                safetyBehind: 5, cooldown: 8 },
+  aggressive: { v0Mult: 1.06, T: 1.0, s0: 1.0, a: 2.2, b: 2.4,
+                politeness: 0.05, threshold: 0.05, biasRight: 0.05, leftPref: 0.30 },
+  normal:     { v0Mult: 1.00, T: 1.5, s0: 1.4, a: 1.6, b: 2.0,
+                politeness: 0.30, threshold: 0.15, biasRight: 0.20, leftPref: 0.05 },
+  passive:    { v0Mult: 0.94, T: 2.0, s0: 1.8, a: 1.1, b: 1.6,
+                politeness: 0.55, threshold: 0.25, biasRight: 0.35, leftPref: 0.00 },
 };
+// Truck overrides (merged onto whatever profile a truck draws): governed top
+// speed, longer effective body, gentle accel, larger minimum gap.
+const TRUCK_OVERRIDE = { v0Cap: 3.0, T: 1.8, s0: 2.0, a: 0.8, b: 1.6,
+                         politeness: 0.45, threshold: 0.30, biasRight: 0.40, leftPref: 0 };
+const B_SAFE = 4.0;            // MOBIL hard safety: no follower forced below −b_safe
+const MERGE_MARGIN = 1.0;     // min bumper gap (cells) required ahead & behind to commit a change
 
 // Scenario config objects. All scenario-specific behavior keys off these
 // fields — the sim loop itself contains no scenario branching by name.
 const SCENARIOS = {
   highway: {
     label: 'Highway with On-Ramp',
-    desc: 'Closed 200-cell ring shown as a strip; cars wrap right → left. Metered on-ramp feeds traffic.',
+    desc: 'Open mainline: traffic enters at the left edge and exits at the right. A metered on-ramp feeds a second stream.',
     laneOptions: [2, 3, 4], defaultLanes: 3,
     speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
-    hasRamp: true, onRampCell: 140, hasOffRamp: false,
+    hasRamp: true, onRampCell: 59, hasOffRamp: false,
     hasIncident: true, lightCells: null, style: 'highway',
   },
   interchange: {
     label: 'Highway Interchange',
-    desc: 'Adds an off-ramp at cell 60 before the on-ramp at 140. Exiting cars weave right and respawn via the ramp queue.',
+    desc: 'Adds an off-ramp before the on-ramp. Exiting cars weave right and peel off; the rest flow on to the right edge.',
     laneOptions: [2, 3, 4], defaultLanes: 3,
     speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
-    hasRamp: true, onRampCell: 140, hasOffRamp: true, offRampCell: 60,
+    hasRamp: true, onRampCell: 59, hasOffRamp: true, offRampCell: 25,
     hasIncident: true, lightCells: null, style: 'highway',
   },
   city: {
     label: 'City Arterial',
-    desc: 'Arterial street with signals at cells 50 / 110 / 170. Internally still a ring; cars spawn at the left edge.',
+    desc: 'Arterial street with signals. Cars enter at the left edge, stop-and-go through the lights, and exit at the right.',
     laneOptions: [1, 2], defaultLanes: 2,
     speedRange: [25, 45], speedStep: 5, defaultSpeed: 35,
     hasRamp: false, hasOffRamp: false,
-    hasIncident: false, lightCells: [50, 110, 170], style: 'city',
+    hasIncident: false, lightCells: [21, 46, 71], style: 'city',
   },
 };
 
@@ -474,7 +528,6 @@ const sim = {
 
   time: 0,             // sim ticks (= simulated seconds)
   cars: [],
-  grid: [],            // grid[lane][cell] = car index, -1 empty, -2 incident
   rampQueue: 0,        // cars waiting at the meter (not yet on the accel lane)
   meterTimer: 0,
   nextId: 1,
@@ -491,23 +544,16 @@ function rampLaneIdx() { return sim.lanes; }                  // accel lane sits
 function rampLen() { return MERGE_SHAPES[sim.mergeShape].len; }
 function rampStart() { return cfg().onRampCell; }
 function rampEnd() { return cfg().onRampCell + rampLen() - 1; } // last usable accel-lane cell
-function densityCap() { return Math.floor(sim.lanes * N * 0.4); }
+function densityCap() { return Math.floor(sim.lanes * N * 0.55); }
 function effTarget() { return Math.min(sim.targetCars, densityCap()); }
 
 /*
- * Fractional speed-limit model.
- * Posted limits rarely land on an integer number of cells/tick
- * (65 mph = 3.87 cells/tick), and the old Math.round() mapping collapsed
- * several slider steps onto the same integer vmax (55→3, 60/65/70/75→4),
- * so most speed-slider movements had literally no effect. Instead:
- *   - vmaxFloat() returns the real-valued limit in cells/tick; weather
- *     subtracts a fractional amount (rain ≈ −8 mph, fog ≈ −17 mph).
- *   - Each car carries a stable personal speedFactor (aggressive drivers run
- *     a few mph over the limit, passive a few under, normal ≈ at it).
- *   - Per tick a car's fractional top speed vf is realized probabilistically:
- *     floor(vf), plus one extra cell with probability frac(vf). The
- *     time-averaged top speed therefore equals vf exactly, so the reported
- *     avg mph (v × 16.8) responds monotonically to every 5 mph slider step.
+ * Continuous speed-limit model (cells/second).
+ * vmaxFloat() returns the real-valued posted limit in cells/s; weather
+ * subtracts a fractional amount (rain ≈ −8 mph, fog ≈ −17 mph). This is the
+ * BASE desired speed v0; each car scales it by its profile v0Mult and a stable
+ * personal speedFactor, so aggressive drivers run a few mph over the limit and
+ * passive a few under. Trucks are governed at TRUCK_OVERRIDE.v0Cap.
  */
 function vmaxFloat() {
   let v = sim.speedMph / MPH_PER_CELL;
@@ -515,20 +561,22 @@ function vmaxFloat() {
   else if (sim.weather === 'fog') v -= 1.0;   // ≈ 17 mph slower in fog
   return Math.max(1, v);
 }
-// Integer convenience (rounded) — used for scan bounds, spawn seeds and the
-// green-wave timing, never for a car's per-tick top speed.
-function vmaxEff() { return Math.max(1, Math.round(vmaxFloat())); }
-// Realize a fractional speed as an integer cells/tick value for this tick.
-function ditherV(vf) { const f = Math.floor(vf); return f + (Math.random() < vf - f ? 1 : 0); }
 // Stable per-car desired-speed multiplier, drawn once per profile assignment.
 function rollSpeedFactor(profName) {
-  if (profName === 'aggressive') return 1.04 + Math.random() * 0.08; // ~3–8 mph over the limit
-  if (profName === 'passive')    return 0.90 + Math.random() * 0.06; // ~3–7 mph under
-  return 0.97 + Math.random() * 0.06;                                // ≈ at the limit
+  if (profName === 'aggressive') return 1.02 + Math.random() * 0.06; // a touch over
+  if (profName === 'passive')    return 0.94 + Math.random() * 0.05; // a touch under
+  return 0.98 + Math.random() * 0.04;                                // ≈ at the limit
 }
-const TRUCK_VMAX = 3.0; // trucks governed at 3 cells/tick ≈ 50 mph regardless of limit
-// Randomization probability for a profile, +0.05 in rain/fog.
-function pEff(prof) { return prof.p + (sim.weather !== 'clear' ? 0.05 : 0); }
+// Per-car desired free-flow speed v0 (cells/s): posted limit × profile × personal,
+// capped for trucks. Weather already folded into vmaxFloat().
+function carV0(car) {
+  let v0 = vmaxFloat() * car.prof.v0Mult * car.speedFactor;
+  if (car.isTruck) v0 = Math.min(v0, TRUCK_OVERRIDE.v0Cap);
+  return Math.max(0.5, v0);
+}
+// Weather stiffens following: longer headway + stronger braking in rain/fog.
+function weatherTfactor() { return sim.weather === 'clear' ? 1 : sim.weather === 'rain' ? 1.15 : 1.3; }
+function weatherS0add() { return sim.weather === 'clear' ? 0 : sim.weather === 'rain' ? 0.3 : 0.5; }
 
 //──────────────────────────── Traffic lights (city) ────────────────────────────
 // Cycle split scales the default 30/4/26 s proportions to the slider value.
@@ -561,242 +609,398 @@ function rollProfile(isTruck) {
 }
 function carColor(profName, isTruck) {
   const h = (a, b) => a + Math.random() * (b - a);
-  if (isTruck) return `hsl(${h(20, 50)},${h(8, 18)}%,${h(60, 75)}%)`;
-  if (profName === 'aggressive') return `hsl(${h(0, 14)},${h(65, 85)}%,${h(50, 62)}%)`;
-  if (profName === 'passive')    return `hsl(${h(205, 230)},${h(32, 50)}%,${h(55, 68)}%)`;
-  return `hsl(${h(0, 360)},${h(8, 22)}%,${h(55, 80)}%)`;
+  if (isTruck) return `hsl(${h(22, 48)},${h(12, 22)}%,${h(58, 74)}%)`;       // tan rigs
+  if (profName === 'aggressive') return `hsl(${(h(-8, 14) + 360) % 360},${h(68, 88)}%,${h(48, 60)}%)`; // hot red
+  if (profName === 'passive')    return `hsl(${h(205, 232)},${h(38, 56)}%,${h(54, 68)}%)`; // cool blue
+  return `hsl(${h(0, 360)},${h(6, 20)}%,${h(54, 80)}%)`;                     // neutral
 }
-// Create a car. Profile and truck status persist until the % sliders change,
-// at which point retuneFleet() may reassign them to match the new mix.
+// Create a car. Profile, truck status, speed factor and color are rolled ONCE
+// here from the CURRENT slider values and then persist for the car's entire
+// life — slider changes only affect cars spawned afterwards, never this one.
 function makeCar(lane, cell, v) {
   const isTruck = Math.random() * 100 < sim.pctTrucks;
   const profName = rollProfile(isTruck);
+  // Build the effective IDM/MOBIL parameter set: base profile, then truck
+  // overrides merged on top. Stored per-car so slider changes never mutate it.
+  const base = PROFILES[profName];
+  const prof = isTruck ? Object.assign({}, base, TRUCK_OVERRIDE) : base;
   // Interchange: each car gets a permanent random 15–30% chance of taking the
-  // off-ramp; it rolls that chance each lap at EXIT_DECIDE_CELL, then weaves right.
+  // off-ramp; it rolls that chance once upstream of the ramp, then weaves right.
   const exitChance = cfg().hasOffRamp ? 0.15 + Math.random() * 0.15 : 0;
   return {
     id: sim.nextId++, lane, cell, v,
-    prevCell: cell, prevLane: lane,
-    profName, prof: PROFILES[profName], isTruck,
+    prevCell: cell, prevLane: lane, startV: v,
+    laneCoord: lane,          // CONTINUOUS lane coordinate (renderer reads this for y)
+    laneFrom: lane, laneTo: lane, laneT: 1, // lane-change animation state (laneT in [0,1])
+    profName, prof, isTruck,
     speedFactor: rollSpeedFactor(profName),
-    exitChance, exiting: Math.random() < exitChance,
-    cool: 0, age: 0, braking: false,
+    exitChance, exiting: Math.random() < exitChance, exitDecided: false,
+    cool: 0, age: 0, braking: false, accel: 0,
     color: carColor(profName, isTruck),
   };
 }
 
-//──────────────────────────── Grid & gap helpers ────────────────────────────
-function buildGrid() {
-  const rows = sim.lanes + (cfg().hasRamp ? 1 : 0);
-  sim.grid = [];
-  for (let l = 0; l < rows; l++) sim.grid.push(new Int16Array(N).fill(-1));
-  if (sim.incident && cfg().hasIncident) sim.grid[sim.lanes - 1][INCIDENT_CELL] = -2;
-  // Cars are written after the incident marker on purpose: if the incident is
-  // toggled on while a car occupies INCIDENT_CELL, the car (an obstacle too)
-  // takes precedence, drives off normally, and the -2 marker reappears on the
-  // next rebuild — the grid is rebuilt every tick, so toggling is immediate.
-  sim.cars.forEach((c, i) => { sim.grid[c.lane][c.cell] = i; });
-}
-function cellFree(lane, cell) { return sim.grid[lane][cell] === -1; }
+//──────────────────────────── Per-lane ordering & gap helpers ────────────────────────────
+// The world is OPEN (cars enter left at cell 0, exit right near cell N) but we
+// still scan with ring-wrap awareness for robustness. We keep no occupancy grid;
+// spatial queries are O(n) scans over sim.cars (≤ ~160 cars), which is plenty
+// fast. A car occupies [cell, cell+CAR_LEN) along travel; the bumper-to-bumper
+// gap to a leader at lead.cell is (lead.cell - car.cell - CAR_LEN), measured on
+// the forward (increasing-cell) direction with ring wrap.
 
-// Distance (in free cells) to the next physical obstacle ahead in a lane.
-function gapAhead(lane, cell, maxScan) {
-  for (let d = 1; d <= maxScan; d++) {
-    if (sim.grid[lane][(cell + d) % N] !== -1) return d - 1;
+// Forward distance from a to b in cells, on the ring [0,N).
+function fwd(a, b) { let d = b - a; while (d < 0) d += N; while (d >= N) d -= N; return d; }
+
+// Find the nearest car ahead of `car` in `lane` (excluding itself). Returns
+// { gap, leadV } where gap is bumper-to-bumper in cells (may be slightly
+// negative if overlapping) and leadV is the leader's speed (cells/s). If no
+// car is found within `maxScan` cells, returns a large gap and v0-ish speed.
+function leaderInLane(car, lane, maxScan) {
+  let bestD = Infinity, lead = null;
+  for (const o of sim.cars) {
+    if (o === car || o.lane !== lane) continue;
+    const d = fwd(car.cell, o.cell);
+    // d === 0 means another car sits on the exact same cell (a would-be overlap,
+    // e.g. evaluating a merge onto an occupant). Count it as the nearest leader
+    // so the resulting negative gap makes MOBIL/IDM reject/avoid the overlap.
+    if (d >= 0 && d < bestD && d <= maxScan) { bestD = d; lead = o; }
   }
-  return maxScan;
-}
-// Distance to the nearest car behind a cell in a lane (for merge safety).
-function gapBehind(lane, cell, maxScan) {
-  for (let d = 1; d <= maxScan; d++) {
-    if (sim.grid[lane][(cell - d + N) % N] !== -1) return d - 1;
-  }
-  return maxScan;
+  if (!lead) return { gap: maxScan, leadV: car.v, lead: null };
+  return { gap: bestD - CAR_LEN, leadV: lead.v, lead };
 }
 
-// Effective gap for a car: physical gap, clipped by red/yellow lights and the
-// end-of-ramp wall. Lights block ALL lanes at their cell; a yellow light only
-// blocks cars that are still outside stopping distance (d > v ⇒ must stop).
-function effGap(lane, cell, v) {
-  // Scan far enough to cover the fastest possible car (aggressive factor ≤ 1.12).
-  const scan = Math.ceil(vmaxFloat() * 1.15) + 6;
-  let g = gapAhead(lane, cell, scan);
+// Find the nearest car behind `car` in `lane` (the would-be follower). Returns
+// { gap, foll } where gap is bumper-to-bumper from the follower to `car`.
+function followerInLane(car, lane, maxScan) {
+  let bestD = Infinity, foll = null;
+  for (const o of sim.cars) {
+    if (o === car || o.lane !== lane) continue;
+    const d = fwd(o.cell, car.cell);   // distance from o forward to car
+    if (d > 0 && d < bestD && d <= maxScan) { bestD = d; foll = o; }
+  }
+  if (!foll) return { gap: maxScan, foll: null };
+  return { gap: bestD - CAR_LEN, foll };
+}
+
+// Public helper (rendering/other agents may use): bumper-to-bumper gap in cells
+// to the leader in `lane`, plus the leader's speed.
+function leaderGap(car, lane) {
+  const r = leaderInLane(car, lane, N);
+  return { gap: r.gap, leadV: r.leadV };
+}
+
+// Distance ahead (cells) to the next STATIONARY virtual obstacle for `car` in
+// `lane`: a red/yellow stop line, the incident block, or the end-of-ramp wall.
+// Returns Infinity when none. Used as a virtual leader with speed 0.
+function virtualObstacle(car, lane) {
+  let best = Infinity;
   const lights = cfg().lightCells;
   if (lights) {
-    for (const lc of lights) {
-      const d = (lc - cell + N) % N;
-      if (d >= 1 && d - 1 < g) {
-        const st = lightState(lights.indexOf(lc));
-        if (st === 'red' || (st === 'yellow' && d > v)) g = d - 1;
-      }
+    for (let i = 0; i < lights.length; i++) {
+      const st = lightState(i);
+      if (st === 'green') continue;
+      const d = fwd(car.cell, lights[i]);   // distance to the stop line
+      // Yellow: only stop if we cannot comfortably clear it (still > ~1 cell away).
+      if (st === 'yellow' && d < Math.max(1, car.v * 0.6)) continue;
+      if (d < best) best = d;
     }
   }
-  if (cfg().hasRamp && lane === rampLaneIdx()) {
-    g = Math.min(g, Math.max(0, rampEnd() - cell)); // wall at end of accel lane
+  if (sim.incident && cfg().hasIncident && lane === sim.lanes - 1) {
+    const d = fwd(car.cell, INCIDENT_CELL);
+    if (d < best) best = d;
   }
-  return g;
+  if (cfg().hasRamp && lane === rampLaneIdx()) {
+    // Wall at the end of the acceleration lane: the car must merge before it.
+    const d = (rampEnd() - car.cell);
+    if (d >= 0 && d < best) best = d;
+  }
+  return best;
 }
 
-//──────────────────────────── Lane changing ────────────────────────────
-// Two-step rule: (1) profile incentive, (2) safety — target cell empty and
-// rear gap in the target lane ≥ the profile's threshold. Runs as a sub-step
-// before the speed/move update so movement happens on a consistent grid.
-function tryChange(car, idx, target, requiredBehind) {
-  if (target < 0 || target > sim.lanes - 1) return false;
-  if (!cellFree(target, car.cell)) return false;
-  if (gapBehind(target, car.cell, requiredBehind + 1) < requiredBehind) return false;
-  sim.grid[car.lane][car.cell] = -1;
-  sim.grid[target][car.cell] = idx;
+//──────────────────────────── IDM longitudinal model ────────────────────────────
+// a_IDM = a·[ 1 − (v/v0)^δ − (s*(v,Δv)/s)² ],  with
+//   s*(v,Δv) = s0 + max(0, v·T + v·Δv / (2·√(a·b)))
+// where s is the bumper-to-bumper gap (cells), Δv = v − v_lead (approach rate),
+// v0 the desired speed (carV0). All quantities are in cell / cell·s⁻¹ units.
+const IDM_DELTA = 4;
+
+// Compute IDM acceleration (cells/s²) for `car` in `lane`, given the gap (cells)
+// to the effective leader and that leader's speed. Clamped for numerical safety.
+function idmAccel(car, gap, leadV) {
+  const prof = car.prof;
+  const v = car.v;
+  const v0 = carV0(car);
+  const a = prof.a, b = prof.b;
+  const T = prof.T * weatherTfactor();
+  const s0 = prof.s0 + weatherS0add();
+  // Guard the gap so a momentary overlap can't blow up the (s*/s)² term.
+  const s = Math.max(0.05, gap);
+  const dv = v - leadV;                              // approach rate
+  let sStar = s0 + v * T + (v * dv) / (2 * Math.sqrt(a * b));
+  if (sStar < s0) sStar = s0;                        // desired gap never below s0
+  let acc = a * (1 - Math.pow(v / v0, IDM_DELTA) - (sStar / s) * (sStar / s));
+  // Clamp braking to a sane bound (also caps the (s*/s)² blow-up near s→0).
+  if (acc < -B_SAFE * 2) acc = -B_SAFE * 2;
+  if (acc > a) acc = a;
+  return acc;
+}
+
+// The acceleration `car` would get following the nearest real OR virtual leader
+// in `lane` — the value MOBIL and the integrator both consult.
+function accelInLane(car, lane) {
+  const scan = Math.ceil(carV0(car) * 1.6) + 8;
+  const r = leaderInLane(car, lane, scan);
+  let gap = r.gap, leadV = r.leadV;
+  // A stationary virtual obstacle (red light / incident / ramp wall) becomes the
+  // effective leader (speed 0) when its stop line is nearer than the real leader.
+  const obst = virtualObstacle(car, lane);
+  if (Number.isFinite(obst)) {
+    const obstGap = obst - CAR_LEN;
+    if (obstGap < gap) { gap = obstGap; leadV = 0; }
+  }
+  return idmAccel(car, gap, leadV);
+}
+
+//──────────────────────────── MOBIL lane changing ────────────────────────────
+// Safety criterion: the prospective new follower's IDM accel after the change
+// must satisfy ã_new ≥ −b_safe (it must not be forced to brake harder than the
+// safe limit). Incentive criterion (asymmetric, with keep-right bias):
+//   ã_c − a_c  >  p·[ (a_o − ã_o) + (a_n − ã_n) ]  +  Δa_th  +  Δa_bias
+// where c = ego, o = old follower (current lane), n = new follower (target lane),
+// tilde = after the hypothetical move. Δa_bias encodes keep-right / left-pref.
+//
+// We evaluate a hypothetical by temporarily moving the ego car to the target
+// lane, recomputing the affected accelerations, then restoring it.
+function mobilGain(car, target) {
+  if (target < 0 || target > sim.lanes - 1) return null;
+  const prof = car.prof;
+
+  // Current-lane actors.
+  const aC = accelInLane(car, car.lane);
+  const oldFollow = followerInLane(car, car.lane, N).foll;
+  const aO = oldFollow ? accelInLane(oldFollow, oldFollow.lane) : 0;
+
+  // Target-lane actors as they are NOW (before the move).
+  const newFollow = followerInLane(car, target, N).foll;
+  const aN = newFollow ? accelInLane(newFollow, newFollow.lane) : 0;
+
+  // Hypothetically move the ego car into the target lane.
+  const savedLane = car.lane;
   car.lane = target;
-  car.cool = car.prof.cooldown;
-  sim.evLaneChanges.push(sim.time);
-  return true;
+  const aCt = accelInLane(car, target);                       // ego after
+  const aOt = oldFollow ? accelInLane(oldFollow, oldFollow.lane) : 0; // old follower relieved
+  const aNt = newFollow ? accelInLane(newFollow, newFollow.lane) : 0; // new follower after
+  car.lane = savedLane;
+
+  // Hard safety. The ego must arrive into a real pocket — a positive bumper gap
+  // both ahead and behind in the target lane — and the new follower must not be
+  // forced to brake harder than −b_safe. The small MERGE_MARGIN keeps the move
+  // from snapping a car a hair's breadth from its new neighbours (which the
+  // sub-step integrator could momentarily turn into an overlap).
+  const newFollowGap = followerInLane(car, target, N).gap;
+  const leadGapT = leaderInLane(car, target, N).gap;
+  if (aNt < -B_SAFE) return null;
+  if (newFollowGap < MERGE_MARGIN) return null;
+  if (leadGapT < MERGE_MARGIN) return null;
+
+  // Keep-right / left-preference bias (asymmetric MOBIL). Moving right (toward
+  // higher lane index) is rewarded by biasRight; moving left is rewarded by
+  // leftPref (aggressive drivers chase the faster left lanes).
+  let bias = 0;
+  if (target > savedLane) bias += prof.biasRight;   // favour the right move
+  else if (target < savedLane) bias += prof.leftPref - prof.biasRight;
+
+  const incentive = (aCt - aC) + prof.politeness * ((aOt - aO) + (aNt - aN));
+  return incentive + bias - prof.threshold;          // > 0 ⇒ change is worthwhile
 }
 
-function laneChangeStep() {
-  const vm = vmaxEff();
-  // Front-to-back order makes sequential application collision-safe.
-  const order = sim.cars.map((c, i) => i).sort((a, b) => sim.cars[b].cell - sim.cars[a].cell);
-  for (const idx of order) {
-    const car = sim.cars[idx];
-    if (car.cool > 0) { car.cool--; continue; }
-    const prof = car.prof;
+// Animate a lane change: snap the logical lane, but start the visual lateral
+// slide from the old lane so the body is drawn straddling the line for ~1.2 s.
+const LANE_CHANGE_TIME = 1.2;   // seconds for the lateral slide
+function commitLaneChange(car, target) {
+  car.laneFrom = car.laneCoord;   // start slide from where the body currently is
+  car.lane = target;
+  car.laneTo = target;
+  car.laneT = 0;
+  car.cool = 1.2;                 // brief cooldown (s) before the next change
+  sim.evLaneChanges.push(sim.time);
+}
 
-    // Ramp cars: merging left into the rightmost main lane is their only move.
+// One MOBIL pass: every car considers the lane(s) adjacent to it. Forced moves
+// (ramp merge, exiting toward the off-ramp, leaving a vanished lane) take
+// priority over discretionary MOBIL incentive changes.
+function laneChangeStep() {
+  // Reservations made THIS pass, so two cars in different lanes can't both merge
+  // into the same (lane, ~cell) pocket — neither would see the other during
+  // evaluation since both are still in their origin lanes. Keyed by target lane,
+  // holding the committed cells; a move is blocked if it lands within ~1.5 car
+  // lengths of one already reserved.
+  const reserved = new Map();           // lane -> [cells]
+  const ringDist = (a, b) => Math.min(fwd(a, b), fwd(b, a));
+  const slotFree = (lane, cell) => {
+    const arr = reserved.get(lane);
+    if (!arr) return true;
+    return arr.every(c => ringDist(c, cell) > CAR_LEN + MERGE_MARGIN);
+  };
+  const reserve = (lane, cell) => {
+    if (!reserved.has(lane)) reserved.set(lane, []);
+    reserved.get(lane).push(cell);
+  };
+  const doCommit = (car, target) => {
+    if (!slotFree(target, car.cell)) return false;
+    commitLaneChange(car, target);
+    reserve(target, car.cell);
+    return true;
+  };
+
+  for (const car of sim.cars) {
+    if (car.cool > 0) { car.cool -= 1; continue; }
+    if (car.laneT < 1) continue;     // already mid-slide, let it finish
+
+    // Ramp/accel-lane cars: their only move is to merge LEFT into the rightmost
+    // main lane. They use MOBIL safety but a relaxed incentive (they MUST merge
+    // before the wall), and a zipper shape lets them accept a tighter gap.
     if (cfg().hasRamp && car.lane === rampLaneIdx()) {
-      // Zipper shape models alternating priority: mainline implicitly yields,
-      // so the merging car accepts a 1-cell rear gap.
-      const behind = sim.mergeShape === 'zipper' ? 1 : prof.safetyBehind;
-      tryChange(car, idx, sim.lanes - 1, behind);
+      const g = mobilGain(car, sim.lanes - 1);
+      // Force the merge as the wall approaches even if the plain incentive is
+      // marginal, as long as it passed the hard-safety gate (g !== null).
+      const urgency = Math.max(0, rampEnd() - car.cell) < 3 ? 0.5 : 0;
+      if (g !== null && g + urgency > -0.2) doCommit(car, sim.lanes - 1);
       continue;
     }
     if (sim.lanes < 2) continue;
 
-    const gC = effGap(car.lane, car.cell, car.v);
-    const gapIn = (l) => l >= 0 && l < sim.lanes ? effGap(l, car.cell, car.v) : -1;
-
-    // Exiting cars (interchange) always work their way right toward the off-ramp.
+    // Exiting cars (interchange) weave toward the rightmost lane for the ramp.
     if (car.exiting && car.lane < sim.lanes - 1) {
-      if (tryChange(car, idx, car.lane + 1, prof.safetyBehind)) continue;
+      const g = mobilGain(car, car.lane + 1);
+      if (g !== null && g > -0.3 && doCommit(car, car.lane + 1)) continue;
     }
 
-    if (car.profName === 'aggressive') {
-      // Changes whenever a neighboring lane is even 1 cell better; prefers left.
-      for (const t of [car.lane - 1, car.lane + 1]) {
-        if (car.exiting && t < car.lane) continue;
-        if (gapIn(t) >= gC + 1 && tryChange(car, idx, t, prof.safetyBehind)) break;
-      }
+    // Discretionary MOBIL: evaluate both neighbours, take the best positive gain.
+    let bestGain = 0, bestTarget = -1;
+    for (const t of [car.lane - 1, car.lane + 1]) {
+      if (car.exiting && t < car.lane) continue;   // exiters never drift left
+      const g = mobilGain(car, t);
+      if (g !== null && g > bestGain) { bestGain = g; bestTarget = t; }
+    }
+    if (bestTarget >= 0) doCommit(car, bestTarget);
+  }
+}
+
+// Advance the lateral slide animation for every car (called once per tick).
+function advanceLaneAnim(dt) {
+  for (const car of sim.cars) {
+    if (car.laneT < 1) {
+      car.laneT = Math.min(1, car.laneT + dt / LANE_CHANGE_TIME);
+      // Smoothstep for a natural ease-in/out across the line.
+      const e = car.laneT * car.laneT * (3 - 2 * car.laneT);
+      car.laneCoord = car.laneFrom + (car.laneTo - car.laneFrom) * e;
     } else {
-      const threshold = car.profName === 'passive' ? 2 : car.v + 1; // impeded test
-      if (gC < threshold) {
-        // Normal/passive keep-right tendency: try right first, then left.
-        for (const t of [car.lane + 1, car.lane - 1]) {
-          if (car.exiting && t < car.lane) continue;
-          if (gapIn(t) > gC && tryChange(car, idx, t, prof.safetyBehind)) break;
-        }
-      } else if (!car.exiting && car.lane < sim.lanes - 1 &&
-                 gapIn(car.lane + 1) >= vm + 2 && Math.random() < 0.25) {
-        // Unforced keep-right drift when the right lane is comfortably open.
-        tryChange(car, idx, car.lane + 1, prof.safetyBehind);
-      }
+      car.laneCoord = car.lane;
     }
   }
 }
 
-//──────────────────────────── NaSch speed update & movement ────────────────────────────
-// Per car: accelerate → profile headway deceleration → randomize → move.
-// Parallel update: all speeds computed against pre-move positions, then all
-// cars advance, so v ≤ gap guarantees no collisions.
+//──────────────────────────── Longitudinal integration & movement ────────────────────────────
+// Integrate IDM over SUBSTEPS sub-steps (dt = 1/SUBSTEPS s) for each car, then
+// detect sensor crossings, off-ramp exits and right-edge outflow. Open-road
+// model: traffic flows strictly left→right; a car whose position passes the
+// right edge (near cell N) drives off and despawns. prevCell/prevLane are saved
+// for the renderer's inter-tick interpolation.
 function speedAndMoveStep() {
-  const vmf = vmaxFloat();
-  const newV = new Array(sim.cars.length);
-
-  for (let i = 0; i < sim.cars.length; i++) {
-    const car = sim.cars[i];
-    const prof = car.prof;
-    car.age++;
-    // Per-car fractional top speed: limit × personal factor, trucks governed
-    // at TRUCK_VMAX (≈50 mph). Dithered to an integer for this tick so the
-    // time-averaged top speed equals the fractional target (see vmaxFloat()).
-    let vf = vmf * car.speedFactor;
-    if (car.isTruck) vf = Math.min(vf, TRUCK_VMAX);
-    const vmaxCar = ditherV(Math.max(1, vf));
-    const accelEvery = Math.max(prof.accelEvery, car.isTruck ? 2 : 1);
-
-    // 1. Accelerate (passive drivers & trucks only every other tick)
-    let v = car.v;
-    if (car.age % accelEvery === 0) v = Math.min(v + 1, vmaxCar);
-    v = Math.min(v, vmaxCar);
-
-    // 2. Decelerate per profile headway: v = min(v, gap + adj), where
-    //    aggressive adj=+1 (closes in), passive adj=−2 (hangs back).
-    //    Hard floor: never exceed the physical gap.
-    const g = effGap(car.lane, car.cell, v);
-    let des = Math.min(v, Math.max(0, g + prof.headwayAdj));
-    des = Math.min(des, g);
-    // Passive gradual braking: at most −1/tick unless collision-imminent.
-    if (prof.gradual && des < car.v - 1) des = Math.min(car.v - 1, g);
-
-    // 3. Randomize: slow by 1 with profile probability p (+weather penalty)
-    if (des > 0 && Math.random() < pEff(prof)) des--;
-
-    newV[i] = des;
+  // Snapshot prev state for interpolation.
+  for (const car of sim.cars) {
+    car.prevCell = car.cell;
+    car.prevLane = car.laneCoord;   // renderer lerps the CONTINUOUS lane coord
+    car.startV = car.v;
   }
 
-  // 4. Move all cars; detect sensor crossings, off-ramp exits, wrap despawns.
-  const remove = new Set();
-  const target = effTarget();
-  for (let i = 0; i < sim.cars.length; i++) {
-    const car = sim.cars[i];
-    car.braking = newV[i] < car.v;
-    car.prevCell = car.cell;
-    car.prevLane = car.lane;
-    car.v = newV[i];
-    car.cell = (car.cell + car.v) % N;
-
-    if (car.v > 0) {
-      const moved = car.v;
-      // Throughput sensor at cell 150
-      const dSensor = (SENSOR_CELL - car.prevCell + N) % N;
-      if (dSensor >= 1 && moved >= dSensor) sim.evThroughput.push(sim.time);
-      if (cfg().hasOffRamp) {
-        // Commit/re-roll the exit decision once per lap, upstream of the ramp.
-        const dDecide = (EXIT_DECIDE_CELL - car.prevCell + N) % N;
-        if (dDecide >= 1 && moved >= dDecide) car.exiting = Math.random() < car.exitChance;
-        // Off-ramp: an exiting car in the rightmost lane departs and respawns
-        // via the on-ramp queue; one that missed the gore point gives up.
-        const dExit = (cfg().offRampCell - car.prevCell + N) % N;
-        if (car.exiting && dExit >= 1 && moved >= dExit) {
-          if (car.lane === sim.lanes - 1) { remove.add(i); sim.rampQueue++; continue; }
-          car.exiting = false; // missed the exit — try again next lap
-        }
-      }
-      // Population control: despawn at the wrap point when over target.
-      if (car.cell < car.prevCell && sim.cars.length - remove.size > target) remove.add(i);
-    } else if (car.prevCell !== car.cell || newV[i] === 0) {
-      // Stop event (city metric): car came to a halt this tick.
-      if (car.braking && car.v === 0) sim.evStops.push(sim.time);
+  // Integrate every car's IDM acceleration in lockstep sub-steps. Acceleration
+  // is recomputed each sub-step against current positions; because per-substep
+  // motion is small this stays collision-free without a strict parallel update.
+  for (let s = 0; s < SUBSTEPS; s++) {
+    const acc = new Array(sim.cars.length);
+    for (let i = 0; i < sim.cars.length; i++) {
+      const car = sim.cars[i];
+      acc[i] = accelInLane(car, car.lane);
+    }
+    for (let i = 0; i < sim.cars.length; i++) {
+      const car = sim.cars[i];
+      let v = car.v + acc[i] * SUB_DT;
+      if (v < 0) v = 0;                       // clamp speed ≥ 0 (no reversing)
+      car.v = v;
+      car.cell += v * SUB_DT;
+      // Ring math keeps cell in [0,N); right-edge despawn is detected via wrap.
+      // (We detect the wrap during the post-move scan below.)
     }
   }
+
+  // Post-move bookkeeping: braking flag, sensor counts, exits, outflow.
+  const remove = new Set();
+  for (let i = 0; i < sim.cars.length; i++) {
+    const car = sim.cars[i];
+    car.age += 1;
+    car.accel = car.v - car.startV;
+    car.braking = car.v < car.startV - 0.02;       // decelerating ⇒ brake lights
+
+    // Did the car pass the right edge this tick? Detect via ring wrap: its
+    // continuous cell exceeded N during integration.
+    let wrapped = false;
+    if (car.cell >= N) { car.cell -= N; wrapped = true; }
+
+    const prev = car.prevCell;
+    const movedDist = wrapped ? (car.cell + N - prev) : (car.cell - prev);
+
+    // Throughput sensor crossing: counted when the car advanced past the sensor
+    // cell this tick (forward distance to it ≤ distance travelled).
+    const dSensor = fwd(prev, SENSOR_CELL);
+    if (movedDist > 0 && dSensor > 0 && dSensor <= movedDist) sim.evThroughput.push(sim.time);
+
+    if (cfg().hasOffRamp) {
+      // Commit/re-roll the exit decision upstream of the ramp.
+      const dDecide = fwd(prev, EXIT_DECIDE_CELL);
+      if (!car.exitDecided && movedDist >= dDecide && dDecide >= 0) {
+        car.exiting = Math.random() < car.exitChance;
+        car.exitDecided = true;
+      }
+      // Off-ramp departure: an exiting car in the rightmost lane peels off.
+      const dExit = fwd(prev, cfg().offRampCell);
+      if (car.exiting && movedDist >= dExit && dExit >= 0 && !wrapped) {
+        if (car.lane === sim.lanes - 1) { remove.add(i); sim.rampQueue++; continue; }
+      }
+    }
+
+    // Stop event (city metric): came to rest this tick at/near a light.
+    if (car.v < 0.05 && car.startV >= 0.05) sim.evStops.push(sim.time);
+
+    // Right-edge outflow: main-lane cars that wrapped past the seam have exited.
+    // Ramp/accel-lane cars are still merging and are kept until they reach a
+    // main lane (they can't realistically wrap before merging on this short ring,
+    // but guard anyway).
+    if (wrapped && (!cfg().hasRamp || car.lane < sim.lanes)) remove.add(i);
+  }
   if (remove.size) sim.cars = sim.cars.filter((_, i) => !remove.has(i));
-  buildGrid();
 }
 
 //──────────────────────────── Spawning / ramp meter ────────────────────────────
+// Open-road inflow: fresh cars enter from the LEFT edge for every scenario and
+// flow rightward; right-edge outflow removes them at the far side. Inflow scales
+// with the population deficit (target − current) so the road fills GRADUALLY
+// from empty, climbs toward effTarget() at a believable pace, then holds. Because
+// makeCar reads the CURRENT sliders, the left-edge stream always reflects the
+// latest settings; the on-screen mix shifts as old cars exit right.
 function spawnStep() {
   const target = effTarget();
-  const pop = sim.cars.length;
 
   if (cfg().hasRamp) {
-    // Highway: small deficits flow in realistically through the on-ramp.
-    if (pop + sim.rampQueue < target) sim.rampQueue++;
-    else if (pop + sim.rampQueue > target) {
-      // Slider dropped: drain the waiting (off-road) queue immediately.
-      sim.rampQueue = Math.max(0, target - pop);
-    }
+    // Metered on-ramp as a SECONDARY inflow with a small standing queue.
+    const pop = sim.cars.length;
+    const want = Math.min(6, Math.max(0, target - pop));
+    if (sim.rampQueue < want && Math.random() < 0.5) sim.rampQueue++;
+    else if (sim.rampQueue > want) sim.rampQueue = want;
 
     const entry = rampStart();
-    const entryFree = cellFree(rampLaneIdx(), entry);
+    const entryFree = laneEntryFree(rampLaneIdx(), entry, 2.2);
     if (sim.meterOn) {
       sim.meterTimer++;
       if (sim.meterTimer >= sim.meterInterval && sim.rampQueue > 0 && entryFree) {
@@ -804,149 +1008,60 @@ function spawnStep() {
         releaseRampCar(entry);
       }
     } else if (sim.rampQueue > 0 && entryFree) {
-      releaseRampCar(entry); // free merging: one per tick as space allows
-    }
-  } else {
-    // City: small deficits enter at the left edge, one car per tick.
-    if (pop < target) {
-      const lanes = [...Array(sim.lanes).keys()];
-      for (const l of lanes.sort(() => Math.random() - 0.5)) {
-        if (cellFree(l, 0) && cellFree(l, 1) && cellFree(l, 2)) {
-          const car = makeCar(l, 0, Math.min(2, vmaxEff()));
-          sim.cars.push(car);
-          sim.grid[l][0] = sim.cars.length - 1;
-          break;
-        }
-      }
+      releaseRampCar(entry);
     }
   }
-  convergePopulation(target);
+
+  spawnLeftEdge(target);
 }
 
-// Fast convergence to the "Number of cars" slider. The ramp / left-edge
-// trickle adds at most 1 car/tick and the wrap-point despawn removes only
-// cars that happen to cross the seam, so a big slider move used to take
-// minutes to show. When the population is more than a couple of cars off
-// target we close ~1/3 of the gap per tick (geometric convergence: a full
-// 0↔200 jump settles within ~10 simulated seconds):
-//   - below target: spawn into sparse mainline stretches (free cell with
-//     clear space ahead and behind, entry speed capped by the gap ahead so
-//     the insertion is collision-safe and doesn't shock followers);
-//   - above target: despawn randomly chosen cars, preferring those near the
-//     wrap seam where a disappearance is least visible.
-function convergePopulation(target) {
+// Is there a clear pocket (≥ minGap cells of clear road ahead, and nothing
+// straddling the entry point) at `cell` in `lane` for a fresh insertion?
+function laneEntryFree(lane, cell, minGap) {
+  for (const o of sim.cars) {
+    if (o.lane !== lane) continue;
+    const ahead = fwd(cell, o.cell);          // o is ahead of the entry
+    const behind = fwd(o.cell, cell);         // o is behind the entry
+    if (ahead < minGap + CAR_LEN) return false;
+    if (behind < CAR_LEN) return false;        // something on top of the entry
+  }
+  return true;
+}
+
+// Inject fresh cars at the leftmost cells. Rate scales with the deficit so a
+// 0→target fill takes a few seconds; near target it falls to a trickle that
+// just replaces cars leaving on the right.
+function spawnLeftEdge(target) {
   const queued = cfg().hasRamp ? sim.rampQueue : 0;
-  const deficit = target - sim.cars.length - queued;
-
-  if (deficit > 2) {
-    let toSpawn = Math.ceil(deficit / 3);
-    let attempts = toSpawn * 10;
-    while (toSpawn > 0 && attempts-- > 0) {
-      const lane = Math.floor(Math.random() * sim.lanes);
-      const cell = Math.floor(Math.random() * N);
-      if (!cellFree(lane, cell)) continue;
-      const ahead = gapAhead(lane, cell, 8);
-      if (ahead < 1 || gapBehind(lane, cell, 3) < 2) continue; // sparse stretches only
-      const car = makeCar(lane, cell, Math.max(1, Math.min(vmaxEff(), ahead)));
-      sim.cars.push(car);
-      sim.grid[lane][cell] = sim.cars.length - 1;
-      toSpawn--;
-    }
-  } else if (sim.cars.length - target > 2) {
-    let toRemove = Math.ceil((sim.cars.length - target) / 3);
-    const seam = [], rest = [];
-    sim.cars.forEach((c, i) => (c.cell >= N - 20 || c.cell < 5 ? seam : rest).push(i));
-    const doomed = new Set();
-    for (const pool of [seam, rest]) {
-      while (toRemove > 0 && pool.length) {
-        doomed.add(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
-        toRemove--;
-      }
-    }
-    if (doomed.size) {
-      sim.cars = sim.cars.filter((_, i) => !doomed.has(i));
-      buildGrid(); // indices shifted
-    }
+  let deficit = target - sim.cars.length - queued;
+  if (deficit <= 0) return;
+  let budget = Math.min(sim.lanes, Math.max(1, Math.ceil(deficit / 8)));
+  const lanes = [...Array(sim.lanes).keys()].sort(() => Math.random() - 0.5);
+  for (const l of lanes) {
+    if (budget <= 0) break;
+    if (!laneEntryFree(l, 0, 2.5)) continue;   // need breathing room
+    // Entry speed: the desired free speed, capped by the gap ahead so the new
+    // car doesn't immediately overrun its leader.
+    const r = leaderInLane({ lane: l, cell: 0, v: 0, prof: PROFILES.normal, isTruck: false, speedFactor: 1 }, l, N);
+    const car = makeCar(l, 0, Math.max(0.5, Math.min(vmaxFloat(), r.gap)));
+    sim.cars.push(car);
+    budget--;
   }
 }
+
 function releaseRampCar(entry) {
-  const car = makeCar(rampLaneIdx(), entry, 1); // re-rolls profile & exit chance
+  const car = makeCar(rampLaneIdx(), entry, 0.8);  // re-rolls profile & exit chance
   sim.cars.push(car);
-  sim.grid[rampLaneIdx()][entry] = sim.cars.length - 1;
   sim.rampQueue--;
-}
-
-//──────────────────────────── Fleet composition ────────────────────────────
-// Assign a driver profile to an existing car, refreshing every profile-derived
-// field (behavior params, personal speed factor, paint color).
-function setCarProfile(car, name) {
-  car.profName = name;
-  car.prof = PROFILES[name];
-  car.speedFactor = rollSpeedFactor(name);
-  car.color = carColor(name, car.isTruck);
-}
-
-// Re-roll the existing fleet so the truck/profile mix matches the sliders
-// immediately. Without this, % sliders only affected newly spawned cars, and
-// on a ring with low turnover the fleet kept its old mix forever, so the
-// sliders appeared dead. Converts the minimum number of randomly chosen cars;
-// the "trucks are never aggressive" rule is preserved.
-function retuneFleet() {
-  const cars = sim.cars, n = cars.length;
-  if (!n) return;
-  const pick = pool => pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
-
-  // 1. Truck share.
-  const wantTrucks = Math.round(n * sim.pctTrucks / 100);
-  const nTrucks = cars.filter(c => c.isTruck).length;
-  if (nTrucks > wantTrucks) {
-    const pool = cars.filter(c => c.isTruck);
-    for (let k = nTrucks - wantTrucks; k > 0 && pool.length; k--) {
-      const c = pick(pool);
-      c.isTruck = false;
-      setCarProfile(c, c.profName); // refresh color & speed factor as a car
-    }
-  } else if (nTrucks < wantTrucks) {
-    const pool = cars.filter(c => !c.isTruck);
-    for (let k = wantTrucks - nTrucks; k > 0 && pool.length; k--) {
-      const c = pick(pool);
-      c.isTruck = true;
-      c.v = Math.min(c.v, Math.floor(TRUCK_VMAX)); // governed cap applies now
-      setCarProfile(c, c.profName === 'aggressive' ? 'normal' : c.profName);
-    }
-  }
-
-  // 2. Aggressive share (drawn from non-truck, non-aggressive cars).
-  const wantAgg = Math.round(n * sim.pctAgg / 100);
-  const nAgg = cars.filter(c => c.profName === 'aggressive').length;
-  if (nAgg > wantAgg) {
-    const pool = cars.filter(c => c.profName === 'aggressive');
-    for (let k = nAgg - wantAgg; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'normal');
-  } else if (nAgg < wantAgg) {
-    const pool = cars.filter(c => !c.isTruck && c.profName === 'normal');
-    pool.push(...cars.filter(c => !c.isTruck && c.profName === 'passive'));
-    for (let k = wantAgg - nAgg; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'aggressive');
-  }
-
-  // 3. Passive share (trucks may be passive).
-  const wantPas = Math.round(n * sim.pctPas / 100);
-  const nPas = cars.filter(c => c.profName === 'passive').length;
-  if (nPas > wantPas) {
-    const pool = cars.filter(c => c.profName === 'passive');
-    for (let k = nPas - wantPas; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'normal');
-  } else if (nPas < wantPas) {
-    const pool = cars.filter(c => c.profName === 'normal');
-    for (let k = wantPas - nPas; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'passive');
-  }
 }
 
 //──────────────────────────── Sim tick ────────────────────────────
 function tick() {
   sim.time++;
-  buildGrid();
-  laneChangeStep();
-  speedAndMoveStep();
-  spawnStep();
+  laneChangeStep();        // MOBIL: decide lane changes (snaps lane, starts slide)
+  advanceLaneAnim(1);      // advance the lateral slide animation by one second
+  speedAndMoveStep();      // IDM: integrate longitudinal motion & handle exits
+  spawnStep();             // open-road inflow at the left edge (+ ramp)
   // Trim rolling event logs to the last 2 minutes of sim time.
   const cut = sim.time - 120;
   for (const k of ['evThroughput', 'evLaneChanges', 'evStops']) {
@@ -956,10 +1071,13 @@ function tick() {
 }
 
 //──────────────────────────── Reset / seeding ────────────────────────────
-// Reset rebuilds the world. The road is pre-seeded to the target population
-// (uniformly spread); afterwards small population changes flow through the
-// on-ramp / left-edge spawn and wrap-point despawn rules, while large slider
-// moves converge quickly via convergePopulation().
+// Reset rebuilds the world and starts the road EMPTY. Traffic is no longer
+// pre-seeded across the whole ring; instead the open-road model takes over from
+// t=0 — fresh cars flow in at the LEFT edge (spawnStep → spawnLeftEdge) and the
+// population climbs toward effTarget() over a few seconds, so the user literally
+// watches traffic accumulate and congestion form from the left. Cars exit on the
+// right, keeping a steady left→right flow. The ramp queue also starts empty and
+// fills from spawnStep, so the highway/interchange on-ramp behaves the same way.
 function resetSim() {
   sim.cars = [];
   sim.rampQueue = 0;
@@ -968,24 +1086,54 @@ function resetSim() {
   sim.evThroughput = []; sim.evLaneChanges = []; sim.evStops = [];
   sim.speedHistory = [];
 
-  const target = effTarget();
-  const perLane = Math.ceil(target / sim.lanes);
-  const used = new Set();
-  let placed = 0;
-  for (let l = 0; l < sim.lanes && placed < target; l++) {
-    const spacing = Math.max(1, Math.floor(N / perLane));
-    for (let k = 0; k < perLane && placed < target; k++) {
-      const cell = (k * spacing + Math.floor(Math.random() * Math.max(1, spacing - 1))) % N;
-      const key = l + ':' + cell;
-      if (used.has(key) || (sim.incident && cfg().hasIncident && l === sim.lanes - 1 && cell === INCIDENT_CELL)) continue;
-      used.add(key);
-      sim.cars.push(makeCar(l, cell, Math.floor(Math.random() * (vmaxEff() + 1))));
-      placed++;
+  // Road starts empty: no pre-seeding. spawnLeftEdge() builds the population up
+  // from zero toward effTarget() as the sim runs, entering from the left edge.
+  if (cfg().style === 'city') genBuildings();
+  sim.lastTickWall = performance.now();
+}
+
+// Change the number of main lanes IN PLACE, without clearing the fleet.
+//   • Increasing: just widen the road. Existing cars stay put; they migrate into
+//     the new emptier lane over the next seconds via MOBIL (path of least
+//     resistance). New left-edge arrivals may use any lane.
+//   • Decreasing: relocate any car now in a vanished lane (index ≥ n) into the
+//     nearest still-valid lane, picking a safe gap when one exists; otherwise it
+//     is dropped onto the edge lane and merges as soon as IDM/MOBIL allow (it
+//     will simply slot in — no hard delete). The ramp/accel lane follows
+//     sim.lanes automatically (rampLaneIdx === sim.lanes).
+function applyLaneCount(n) {
+  const opts = cfg().laneOptions;
+  if (!opts.includes(n)) n = cfg().defaultLanes;
+  const old = sim.lanes;
+  if (n === old) { sim.lanes = n; updateLabels(); return; }
+
+  if (n < old) {
+    // Move cars out of lanes that will no longer exist (lane index ≥ n).
+    for (const car of sim.cars) {
+      let lane = car.lane;
+      // A ramp/accel-lane car (index === old) maps onto the new ramp lane (n).
+      if (cfg().hasRamp && lane === old) { car.lane = n; car.laneFrom = car.laneTo = car.laneCoord = n; continue; }
+      if (lane < n) continue;            // still valid
+      // Find the nearest valid lane (search inward) that has a safe pocket.
+      let placed = -1;
+      for (let t = n - 1; t >= 0; t--) {
+        const probe = { lane: car.lane, cell: car.cell };
+        const aheadGap = leaderInLane({ ...probe, v: car.v }, t, N).gap;
+        const behindGap = followerInLane({ ...probe }, t, N).gap;
+        if (aheadGap > 0.2 && behindGap > 0.2) { placed = t; break; }
+      }
+      if (placed < 0) placed = n - 1;    // no safe gap: drop onto edge lane, IDM sorts it out
+      car.lane = placed;
+      car.laneFrom = car.laneTo = car.laneCoord = placed;
+      car.laneT = 1;
     }
   }
-  if (cfg().style === 'city') genBuildings();
-  buildGrid();
-  sim.lastTickWall = performance.now();
+
+  sim.lanes = n;
+  // Rebuild lane-indexed structures and force the static scene to redraw at the
+  // new width (the render loop keys off sim.lanes in its signature).
+  sceneSig = '';
+  updateLabels();
 }
 
 // Deterministic pseudo-random skyline for the city backdrop.
@@ -1126,8 +1274,9 @@ let fogGrad = null;                              // cached fog gradient
 
 function resizeCanvas() {
   dpr = window.devicePixelRatio || 1;
-  W = canvas.clientWidth;
-  H = canvas.clientHeight;
+  // Fullscreen: the canvas fills the entire viewport edge to edge.
+  W = window.innerWidth;
+  H = window.innerHeight;
   canvas.width = W * dpr;
   canvas.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1135,7 +1284,14 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 
 const LANE_H = 26;
-function roadTop() { return cfg().style === 'city' ? 150 : 104; }
+// Vertically centre the road band within the full-viewport canvas, leaving
+// scenery above and below. Highway scenarios add one ramp/accel lane below the
+// mainline (rampLaneIdx === sim.lanes), so the band is one LANE_H taller.
+function roadTop() {
+  const rows = sim.lanes + (cfg().hasRamp ? 1 : 0);
+  const band = rows * LANE_H;
+  return Math.max(40, Math.round((H - band) / 2));
+}
 function cw() { return W / N; }
 // Interpolated position in cells, handling ring wrap.
 function lerpPos(car, a) {
@@ -1267,7 +1423,17 @@ function render() {
 //—— Highway static layer: terrain, asphalt, markings, ramps, guardrails ——
 function buildHighwayStatic(g) {
   const top = roadTop(), rh = sim.lanes * LANE_H, c = cw();
-  const rs = rampStart() * c, rl = rampLen() * c, ry = top + rh;
+  const ry = top + rh;                       // y of the accel-lane top (merge boundary)
+  const ay = ry + LANE_H;                     // y of the accel-lane bottom / outer edge
+  // Accel lane occupies grid row rampLaneIdx()===sim.lanes, cells rampStart()..rampEnd(),
+  // i.e. the pixel box [rsX, reX] × [ry, ay]. Cars travel ON this box, so the painted
+  // ramp footprint is tied directly to those cells.
+  const rsX = rampStart() * c;               // left edge of accel lane (entry from ramp)
+  const reX = (rampEnd() + 1) * c;           // right edge of accel lane (end of taper)
+  // Approach ramp angles up from the lower-left into the accel-lane entry. Its drop is a
+  // fraction of the generous below-road margin so it always stays on-screen.
+  const appDrop = Math.min(LANE_H * 2.6, (H - ay) * 0.55);  // vertical rise of the approach
+  const appRun = appDrop * 0.62;             // horizontal run (gentle merge angle)
   const rnd = sceneRand(424243);
 
   // terrain: layered green gradient with mottling, tufts, bushes
@@ -1311,84 +1477,112 @@ function buildHighwayStatic(g) {
   g.fillStyle = '#e4e5e9'; g.fillRect(0, ry - 3.5, W, 2);    // white right-edge line
   paintLaneDashes(g, top);
 
-  // on-ramp approach roadway (diagonal) with edge lines
+  // ── On-ramp approach roadway: a separate lane angling up from the lower-left
+  //    into the accel-lane entry at (rsX, ay). Its outer (left) edge runs from
+  //    (appX0, appBot) to the accel-lane outer edge; its inner (right) edge runs
+  //    to the merge boundary (rsX, ry). Drawn the same asphalt tone as the road.
+  const appBot = ay + appDrop;                         // bottom of the approach
+  const appX0 = rsX - appRun;                          // outer-left foot of the approach
+  const appX1 = appX0 + LANE_H;                         // inner-right foot (one lane wide)
   g.fillStyle = '#36373c';
   g.beginPath();
-  g.moveTo(rs - 30, ry + LANE_H); g.lineTo(rs + 8, ry + LANE_H);
-  g.lineTo(rs - 18, ry + LANE_H + 70); g.lineTo(rs - 60, ry + LANE_H + 70);
+  g.moveTo(rsX, ay); g.lineTo(rsX + LANE_H * 0.55, ay);  // top: where it meets accel lane
+  g.lineTo(appX1, appBot); g.lineTo(appX0, appBot);
   g.closePath(); g.fill();
-  g.strokeStyle = '#caccd2'; g.lineWidth = 1.5;
+  // approach edge lines (white)
+  g.strokeStyle = '#caccd2'; g.lineWidth = 1.8;
   g.beginPath();
-  g.moveTo(rs - 28, ry + LANE_H); g.lineTo(rs - 58, ry + LANE_H + 70);
-  g.moveTo(rs + 6, ry + LANE_H); g.lineTo(rs - 16, ry + LANE_H + 70);
+  g.moveTo(rsX, ay); g.lineTo(appX0, appBot);            // outer edge
+  g.moveTo(rsX + LANE_H * 0.55, ay); g.lineTo(appX1, appBot); // inner edge
   g.stroke();
+  // approach centre dashes
+  g.strokeStyle = 'rgba(230,231,236,.45)'; g.lineWidth = 2; g.setLineDash([7, 8]);
+  g.beginPath();
+  g.moveTo(rsX + LANE_H * 0.28, ay); g.lineTo((appX0 + appX1) / 2, appBot);
+  g.stroke(); g.setLineDash([]);
 
-  // acceleration lane with end taper
+  // ── Acceleration lane: the box [rsX, reX] × [ry, ay] cars actually drive on,
+  //    with a gore taper closing the outer edge into the mainline at the end.
+  const taper = Math.min(LANE_H * 1.3, (reX - rsX) * 0.45);  // length of the end wedge
   g.fillStyle = '#3b3c41';
   g.beginPath();
-  g.moveTo(rs - 4, ry); g.lineTo(rs + rl + 16, ry);
-  g.lineTo(rs + rl - 6, ry + LANE_H); g.lineTo(rs - 34, ry + LANE_H);
+  g.moveTo(rsX, ry); g.lineTo(reX, ry);
+  g.lineTo(reX, ry + 2); g.lineTo(reX - taper, ay);     // outer edge tapers up to boundary
+  g.lineTo(rsX, ay);
   g.closePath(); g.fill();
-  // mainline edge becomes dotted across the merge area
-  g.fillStyle = '#3b3c41'; g.fillRect(rs - 4, ry - 4.5, rl + 20, 4.5);
+  // mainline right-edge line becomes a dotted "merge" line across the accel zone
+  g.fillStyle = '#3b3c41'; g.fillRect(rsX, ry - 4, reX - rsX, 4);
   g.fillStyle = '#e4e5e9';
-  for (let x = rs - 2; x < rs + rl + 10; x += 12) g.fillRect(x, ry - 3.5, 6, 2);
-  // accel-lane outer edge line
-  g.fillRect(rs - 32, ry + LANE_H - 3, rl + 24, 1.8);
-  // gore chevrons in the end taper
-  g.strokeStyle = 'rgba(230,231,236,.7)'; g.lineWidth = 2;
+  for (let x = rsX + 2; x < reX - 4; x += 13) g.fillRect(x, ry - 3.5, 7, 2);
+  // accel-lane outer (white) edge line, following the taper into the boundary
+  g.strokeStyle = '#e4e5e9'; g.lineWidth = 2;
   g.beginPath();
-  for (let k = 0; k < 4; k++) {
-    const gx = rs + rl - 2 + k * 5;
-    g.moveTo(gx, ry + 2); g.lineTo(gx + 9, ry + LANE_H - 4);
+  g.moveTo(rsX, ay - 1.5); g.lineTo(reX - taper, ay - 1.5); g.lineTo(reX, ry + 1);
+  g.stroke();
+  // gore chevrons filling the closing wedge of the taper
+  g.strokeStyle = 'rgba(230,231,236,.65)'; g.lineWidth = 2;
+  g.beginPath();
+  for (let k = 0; k < 3; k++) {
+    const gx = reX - taper + k * (taper / 3.2);
+    g.moveTo(gx, ay - 3); g.lineTo(gx + taper * 0.5, ry + 3);
   }
   g.stroke();
 
-  // off-ramp (interchange): exit wedge, gore striping, EXIT sign
+  // ── Off-ramp (interchange): a wedge peeling off the rightmost mainline lane to
+  //    the lower-right, opening at the boundary (ry) and dropping below the road.
   if (cfg().hasOffRamp) {
-    const ox = cfg().offRampCell * c;
+    const ox = cfg().offRampCell * c;                  // exit gore point on the boundary
+    const offDrop = Math.min(LANE_H * 2.4, (H - ay) * 0.5);
+    const offW = LANE_H;                               // one ramp lane wide
+    const mouth = LANE_H * 1.6;                         // how far back the mouth opens
     g.fillStyle = '#36373c';
     g.beginPath();
-    g.moveTo(ox - 44, ry); g.lineTo(ox + 4, ry);
-    g.lineTo(ox + 48, ry + 56); g.lineTo(ox + 8, ry + 56);
+    g.moveTo(ox - mouth, ry); g.lineTo(ox, ry);        // mouth along the boundary
+    g.lineTo(ox + offDrop * 0.55 + offW, ry + offDrop);
+    g.lineTo(ox + offDrop * 0.55, ry + offDrop);
     g.closePath(); g.fill();
-    g.strokeStyle = '#caccd2'; g.lineWidth = 1.5;
+    // ramp edge lines (white)
+    g.strokeStyle = '#caccd2'; g.lineWidth = 1.8;
     g.beginPath();
-    g.moveTo(ox - 42, ry); g.lineTo(ox + 9, ry + 56);
-    g.moveTo(ox + 3, ry); g.lineTo(ox + 46, ry + 56);
+    g.moveTo(ox - mouth, ry); g.lineTo(ox + offDrop * 0.55, ry + offDrop);   // inner
+    g.moveTo(ox, ry); g.lineTo(ox + offDrop * 0.55 + offW, ry + offDrop);    // outer
     g.stroke();
-    // dotted mainline edge across the exit mouth
-    g.fillStyle = '#3b3c41'; g.fillRect(ox - 44, ry - 4.5, 50, 4.5);
+    // mainline right-edge line becomes dotted across the exit mouth
+    g.fillStyle = '#3b3c41'; g.fillRect(ox - mouth, ry - 4, mouth + 2, 4);
     g.fillStyle = '#e4e5e9';
-    for (let x = ox - 42; x < ox + 2; x += 12) g.fillRect(x, ry - 3.5, 6, 2);
-    // gore chevrons between exit and mainline
-    g.strokeStyle = 'rgba(230,231,236,.65)'; g.lineWidth = 2;
+    for (let x = ox - mouth + 2; x < ox; x += 13) g.fillRect(x, ry - 3.5, 7, 2);
+    // gore chevrons in the triangular nose just past the exit point
+    g.strokeStyle = 'rgba(230,231,236,.6)'; g.lineWidth = 2;
     g.beginPath();
     for (let k = 1; k <= 3; k++) {
-      g.moveTo(ox + 7, ry + k * 9); g.lineTo(ox + 7 + k * 7, ry + k * 9 + 6);
+      const d = k * (offDrop / 4.5);
+      g.moveTo(ox + d * 0.55, ry + d); g.lineTo(ox + d * 0.55 + d * 0.5, ry + d + 5);
     }
     g.stroke();
-    // EXIT board
-    g.fillStyle = '#0f7a3d'; rr(g, ox + 28, ry + 26, 34, 16, 2);
-    g.strokeStyle = '#e8f5ee'; g.lineWidth = 1; g.strokeRect(ox + 29.5, ry + 27.5, 31, 13);
-    g.fillStyle = '#fff'; g.font = 'bold 9px system-ui'; g.textAlign = 'center';
-    g.fillText('EXIT', ox + 45, ry + 37);
+    // EXIT board on a post beside the ramp
+    const sgx = ox + offDrop * 0.55 + offW + 6, sgy = ry + offDrop * 0.55;
+    g.fillStyle = '#3c3e45'; g.fillRect(sgx + 16, sgy + 17, 2, offDrop * 0.45);
+    g.fillStyle = '#0f7a3d'; rr(g, sgx, sgy, 36, 17, 2);
+    g.strokeStyle = '#e8f5ee'; g.lineWidth = 1; g.strokeRect(sgx + 1.5, sgy + 1.5, 33, 14);
+    g.fillStyle = '#fff'; g.font = 'bold 10px system-ui'; g.textAlign = 'center';
+    g.fillText('EXIT', sgx + 18, sgy + 12);
     g.textAlign = 'left';
   }
 
-  // guardrails: continuous along the top, gapped at the ramps below
+  // guardrails: continuous along the top, gapped below where ramps break through
   drawGuardrail(g, 0, W, top - 11);
-  const gaps = [[rs - 80, rs + rl + 34]];
+  const railY = ay + 11;                               // rail sits below the accel lane
+  const gaps = [[rsX - appRun - 10, reX + 6]];          // on-ramp + accel-lane gap
   if (cfg().hasOffRamp) {
     const ox = cfg().offRampCell * c;
-    gaps.push([ox - 60, ox + 64]);
+    gaps.push([ox - LANE_H * 1.8, ox + LANE_H * 2.6]);
   }
-  for (const s of railSegs(0, W, gaps)) drawGuardrail(g, s[0], s[1], ry + 11);
+  for (const s of railSegs(0, W, gaps)) drawGuardrail(g, s[0], s[1], railY);
 
   if (sim.weather === 'rain') {
     paintWetSheen(g, top, rh);
     g.fillStyle = 'rgba(170,195,235,.10)';            // accel lane gets the glaze too
-    g.fillRect(rs - 34, ry, rl + 50, LANE_H);
+    g.fillRect(rsX, ry, reX - rsX, LANE_H);
   }
   drawSensor(g, top, rh);
 }
@@ -1396,40 +1590,48 @@ function buildHighwayStatic(g) {
 //—— Highway dynamic layer: ramp queue, meter signal, incident ——
 function drawHighwayScene() {
   const top = roadTop(), rh = sim.lanes * LANE_H, c = cw();
-  const rs = rampStart() * c, ry = top + rh;
+  const ry = top + rh, ay = ry + LANE_H;
+  const rsX = rampStart() * c;                          // accel-lane entry x
+  // Approach geometry (mirrors buildHighwayStatic so cars/meter sit on the ramp)
+  const appDrop = Math.min(LANE_H * 2.6, (H - ay) * 0.55);
+  const appRun = appDrop * 0.62;
+  const appBot = ay + appDrop;
+  // Approach centreline: from the accel-lane entry down-left to the queue foot.
+  const cTopX = rsX + LANE_H * 0.28, cBotX = (rsX - appRun) + LANE_H / 2;
+  const ang = Math.atan2(appBot - ay, cBotX - cTopX);   // direction of travel up-ramp
 
-  // queued cars angled along the approach ramp
+  // queued cars stacked along the approach centreline, nose pointing up-ramp
   const q = Math.min(sim.rampQueue, 8);
   if (q > 0) {
-    const ang = Math.atan2(-70, 28);                  // direction of travel up-ramp
     for (let i = 0; i < q; i++) {
-      const t = 0.12 + i * 0.105;
+      const t = 0.16 + i * (0.7 / 8);                   // 0=at meter, 1=foot of ramp
       ctx.save();
-      ctx.translate(rs - 11 - 28 * t, ry + LANE_H + 70 * t);
+      ctx.translate(cTopX + (cBotX - cTopX) * t, ay + (appBot - ay) * t);
       ctx.rotate(ang);
-      ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(-4.6, -2.2, 10.6, 5.6);
-      ctx.fillStyle = '#a7adba'; rr(ctx, -5, -2.8, 10, 5.2, 1.5);
-      ctx.fillStyle = 'rgba(18,26,38,.75)'; ctx.fillRect(0.8, -2.1, 1.8, 3.8);
+      ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(-5.6, -2.2, 11.6, 5.6);
+      ctx.fillStyle = '#a7adba'; rr(ctx, -6, -2.8, 11, 5.2, 1.5);
+      ctx.fillStyle = 'rgba(18,26,38,.75)'; ctx.fillRect(4.0, -2.1, 1.8, 3.8);
       ctx.restore();
     }
   }
   if (sim.rampQueue > 8) {
-    ctx.fillStyle = '#dfe2ea'; ctx.font = '11px system-ui';
-    ctx.fillText('+' + (sim.rampQueue - 8), rs - 74, ry + LANE_H + 64);
+    ctx.fillStyle = '#dfe2ea'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText('+' + (sim.rampQueue - 8), cBotX, appBot + 14);
+    ctx.textAlign = 'left';
   }
 
-  // ramp meter: two-lamp signal head with glow on the active lamp
+  // ramp meter: two-lamp signal head on a post just inside the accel-lane entry
   if (sim.meterOn) {
     const green = sim.meterTimer >= sim.meterInterval - 1;
-    const mx = rs - 12, my = ry + 3;
-    ctx.fillStyle = '#3c3e45'; ctx.fillRect(mx + 3, my + 14, 2, 8);   // pole
-    ctx.fillStyle = '#15161b'; rr(ctx, mx, my, 8, 15, 2);             // housing
-    ctx.beginPath(); ctx.arc(mx + 4, my + 4.5, 2.5, 0, 7);
+    const mx = cTopX - 4, my = ay + 6;
+    ctx.fillStyle = '#3c3e45'; ctx.fillRect(mx + 3, my + 16, 2, 9);   // pole
+    ctx.fillStyle = '#15161b'; rr(ctx, mx, my, 9, 17, 2);            // housing
+    ctx.beginPath(); ctx.arc(mx + 4.5, my + 5, 2.6, 0, 7);
     ctx.fillStyle = green ? '#46221f' : '#ff5148'; ctx.fill();
-    ctx.beginPath(); ctx.arc(mx + 4, my + 10.5, 2.5, 0, 7);
+    ctx.beginPath(); ctx.arc(mx + 4.5, my + 12, 2.6, 0, 7);
     ctx.fillStyle = green ? '#46e07c' : '#1d4a2c'; ctx.fill();
     ctx.fillStyle = green ? 'rgba(70,224,124,.25)' : 'rgba(255,81,72,.25)';
-    ctx.beginPath(); ctx.arc(mx + 4, green ? my + 10.5 : my + 4.5, 5.5, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.arc(mx + 4.5, green ? my + 12 : my + 5, 6, 0, 7); ctx.fill();
   }
 
   // incident: skid marks, crashed car skewed across the lane, cones, flare
@@ -1604,7 +1806,7 @@ function buildCityStatic(g) {
 
   // streetlights: curved poles with warm light pools on the roadway,
   // mirrored on the far side to match the mirrored skyline
-  for (const [cell, side] of [[25, 0], [85, 0], [145, 0], [55, 1], [130, 1], [185, 1]]) {
+  for (const [cell, side] of [[10, 0], [36, 0], [61, 0], [23, 1], [55, 1], [78, 1]]) {
     const x = cell * c;
     const by = side ? top + rh + 3 : top - 3;          // base at the curb
     const dir = side ? 1 : -1;                         // pole extends off-road
@@ -1661,91 +1863,161 @@ function drawSensor(g, top, rh) {
 // details are gated on length so vehicles degrade to clean silhouettes when
 // the road is dense (cw() can drop well below 6 px). No save/restore and no
 // per-frame allocations in the loop — plain fills only.
+
 function drawCars(a) {
   const top = roadTop(), c = cw();
   const blink = Math.floor(performance.now() / 400) % 2 === 0;
   for (const car of sim.cars) {
     const pos = lerpPos(car, a);
-    const laneF = car.prevLane + (car.lane - car.prevLane) * a;
+    // Lerp the CONTINUOUS lane coordinate (prev → current) so a MOBIL lane
+    // change is drawn straddling the line as the body slides across.
+    const laneF = car.prevLane + (car.laneCoord - car.prevLane) * a;
     const x = pos * c;
     const y = top + laneF * LANE_H + LANE_H / 2;
+    // len = body length in px along travel; trucks longer than cars.
     if (car.isTruck) drawTruck(car, x, y, c * 1.15, blink);
-    else drawCar(car, x, y, c * 0.85, blink);
+    else drawCar(car, x, y, c * 0.9, blink);
   }
 }
 
 // Rear (taillights / brake glow) + front (headlights) + exit indicators,
 // shared by cars and trucks. yt/h bound the body the lights attach to.
 function drawVehicleLights(car, x, len, yt, h, blink) {
+  const lh = Math.max(1.4, h * 0.16);                  // lamp height scales w/ body
+  const inset = Math.min(2.0, h * 0.14);               // keep lamps off the edges
   if (car.braking) {
     ctx.fillStyle = 'rgba(255,59,48,.30)';             // brake-light glow
     ctx.fillRect(x - 1.8, yt - 0.5, 2.6, h + 1);
     ctx.fillStyle = '#ff3b30';
   } else ctx.fillStyle = '#a63b30';
-  ctx.fillRect(x, yt + 0.9, 1.3, 1.8);                 // taillights
-  ctx.fillRect(x, yt + h - 2.7, 1.3, 1.8);
+  ctx.fillRect(x, yt + inset, 1.3, lh);                // taillights (both corners)
+  ctx.fillRect(x, yt + h - inset - lh, 1.3, lh);
   ctx.fillStyle = '#ffe9ad';                           // headlights
-  ctx.fillRect(x + len - 1.4, yt + 0.9, 1.4, 1.7);
-  ctx.fillRect(x + len - 1.4, yt + h - 2.6, 1.4, 1.7);
+  ctx.fillRect(x + len - 1.4, yt + inset, 1.4, lh);
+  ctx.fillRect(x + len - 1.4, yt + h - inset - lh, 1.4, lh);
   if (car.exiting && blink) {                          // right-turn indicators
     ctx.fillStyle = '#ffb02e';
-    ctx.fillRect(x + len - 1.6, yt + h - 1.5, 1.6, 1.6);
-    ctx.fillRect(x, yt + h - 1.5, 1.6, 1.6);
+    ctx.fillRect(x + len - 1.6, yt + h - 1.6, 1.6, 1.6);
+    ctx.fillRect(x, yt + h - 1.6, 1.6, 1.6);
   }
 }
 
+// Top-down car body outline: rounded rear, tapered/rounded front (hood).
+// Builds a path on g; caller sets fillStyle and calls fill(). Radius clamped
+// so it stays valid at tiny len. front = +x edge, rear = x edge.
+function carBody(g, x, yt, len, h) {
+  const rRear = Math.min(h * 0.30, len * 0.22);        // squarer rear corners
+  const rFront = Math.min(h * 0.46, len * 0.30);       // rounder hood corners
+  g.beginPath();
+  g.moveTo(x + rRear, yt);
+  g.lineTo(x + len - rFront, yt);
+  g.arcTo(x + len, yt, x + len, yt + h, rFront);        // front-top hood curve
+  g.arcTo(x + len, yt + h, x, yt + h, rFront);          // front-bottom hood curve
+  g.lineTo(x + rRear, yt + h);
+  g.arcTo(x, yt + h, x, yt, rRear);                     // rear-bottom corner
+  g.arcTo(x, yt, x + len, yt, rRear);                  // rear-top corner
+  g.closePath();
+}
+
 function drawCar(car, x, y, len, blink) {
-  const h = LANE_H * 0.46, yt = y - h / 2;
-  ctx.fillStyle = 'rgba(0,0,0,.30)';                   // soft drop shadow
-  rr(ctx, x + 0.6, yt + 1.8, len, h, 2.5);
-  if (len > 4) {                                       // wheels at both axles
-    ctx.fillStyle = '#14151a';
-    const ww = Math.max(1.4, len * 0.18);
-    ctx.fillRect(x + len * 0.10, yt + h - 1.2, ww, 2.8);
-    ctx.fillRect(x + len * 0.72, yt + h - 1.2, ww, 2.8);
+  // Width derived from len so the car is always clearly longer than wide
+  // (~2.2:1), clamped to fit the lane.
+  const h = Math.min(len * 0.46, LANE_H * 0.8), yt = y - h / 2;
+
+  ctx.fillStyle = 'rgba(0,0,0,.32)';                   // soft drop shadow
+  rr(ctx, x + 0.7, yt + 1.8, len, h, h * 0.32);
+
+  if (len > 7) {                                       // tire tops at 4 corners
+    ctx.fillStyle = '#16171c';
+    const ww = Math.max(1.6, len * 0.16), wh = Math.max(1.2, h * 0.13);
+    const rearX = x + len * 0.13, frontX = x + len * 0.70;
+    ctx.fillRect(rearX, yt - wh * 0.5, ww, wh);        // top edge (both axles)
+    ctx.fillRect(frontX, yt - wh * 0.5, ww, wh);
+    ctx.fillRect(rearX, yt + h - wh * 0.5, ww, wh);    // bottom edge
+    ctx.fillRect(frontX, yt + h - wh * 0.5, ww, wh);
   }
-  ctx.fillStyle = car.color;                           // body
-  rr(ctx, x, yt, len, h, 2.5);
-  if (len > 5) {                                       // glass cabin, set forward
-    ctx.fillStyle = 'rgba(15,23,38,.78)';
-    rr(ctx, x + len * 0.42, yt + 1.1, len * 0.34, h - 2.2, 1.5);
+
+  ctx.fillStyle = car.color;                           // painted body
+  carBody(ctx, x, yt, len, h);
+  ctx.fill();
+
+  if (len > 9) {                                       // greenhouse: roof + 2 windows
+    const gx = x + len * 0.30, gw = len * 0.40;        // glass band region
+    const gInset = h * 0.18;
+    ctx.fillStyle = 'rgba(18,28,46,.80)';              // windshield (forward)
+    rr(ctx, gx + gw * 0.58, yt + gInset, gw * 0.42, h - gInset * 2, 1.2);
+    rr(ctx, gx, yt + gInset, gw * 0.34, h - gInset * 2, 1.2); // rear window (aft)
+    ctx.fillStyle = 'rgba(150,180,210,.16)';           // subtle glass glint
+    rr(ctx, gx + gw * 0.58, yt + gInset, gw * 0.42, Math.max(1, h * 0.22), 1);
+    rr(ctx, gx, yt + gInset, gw * 0.34, Math.max(1, h * 0.22), 1);
+  } else if (len > 5) {                                 // small: single glass cabin
+    ctx.fillStyle = 'rgba(18,28,46,.78)';
+    rr(ctx, x + len * 0.40, yt + h * 0.18, len * 0.34, h * 0.64, 1.2);
   }
-  if (len > 3) {                                       // roof highlight stripe
-    ctx.fillStyle = 'rgba(255,255,255,.20)';
-    ctx.fillRect(x + 1, yt + 1, Math.max(1, len * 0.38), 1.3);
+
+  if (len > 9) {                                       // side mirror nubs (front)
+    ctx.fillStyle = car.color;
+    const mx = x + len * 0.66, mw = Math.max(1, len * 0.07), mh = Math.max(1, h * 0.12);
+    ctx.fillRect(mx, yt - mh, mw, mh);
+    ctx.fillRect(mx, yt + h, mw, mh);
   }
+
+  if (len > 6) {                                       // glossy centerline roof sheen
+    ctx.fillStyle = 'rgba(255,255,255,.16)';
+    ctx.fillRect(x + len * 0.10, yt + h * 0.5 - 0.7, len * 0.55, 1.4);
+  }
+
   drawVehicleLights(car, x, len, yt, h, blink);
 }
 
 function drawTruck(car, x, y, len, blink) {
-  const h = LANE_H * 0.62, yt = y - h / 2;
-  ctx.fillStyle = 'rgba(0,0,0,.30)';                   // soft drop shadow
-  rr(ctx, x + 0.6, yt + 1.8, len, h, 2);
-  if (len < 6) {                                       // too small for cab/trailer
+  // Long and comparatively narrow from above (~3:1), clamped to the lane.
+  const h = Math.min(len * 0.34, LANE_H * 0.8), yt = y - h / 2;
+
+  ctx.fillStyle = 'rgba(0,0,0,.34)';                   // soft drop shadow
+  rr(ctx, x + 0.7, yt + 1.9, len, h, h * 0.28);
+
+  if (len < 7) {                                       // too small for cab/trailer
     ctx.fillStyle = car.color;
     rr(ctx, x, yt, len, h, 1.5);
     drawVehicleLights(car, x, len, yt, h, blink);
     return;
   }
-  const cabLen = Math.max(2.4, len * 0.24);
-  const trLen = len - cabLen - 1.2;                    // visible cab/trailer gap
-  ctx.fillStyle = '#14151a';                           // tandem rear + cab axles
-  ctx.fillRect(x + 0.8, yt + h - 1.2, 1.8, 3);
-  ctx.fillRect(x + 3.2, yt + h - 1.2, 1.8, 3);
-  ctx.fillRect(x + trLen + 1.6, yt + h - 1.2, 1.8, 3);
+  const cabLen = Math.max(2.6, len * 0.24);
+  const gap = Math.max(0.8, len * 0.04);
+  const trLen = len - cabLen - gap;                    // trailer + visible gap
+
+  if (len > 9) {                                       // tandem trailer + cab wheels
+    ctx.fillStyle = '#16171c';
+    const wh = Math.max(1.2, h * 0.16);
+    ctx.fillRect(x + 1.0, yt - wh * 0.5, 1.8, wh);
+    ctx.fillRect(x + 3.6, yt - wh * 0.5, 1.8, wh);
+    ctx.fillRect(x + 1.0, yt + h - wh * 0.5, 1.8, wh);
+    ctx.fillRect(x + 3.6, yt + h - wh * 0.5, 1.8, wh);
+    ctx.fillRect(x + trLen + gap + 0.6, yt - wh * 0.5, 1.8, wh);
+    ctx.fillRect(x + trLen + gap + 0.6, yt + h - wh * 0.5, 1.8, wh);
+  }
+
   ctx.fillStyle = car.color;                           // boxy trailer…
   rr(ctx, x, yt, trLen, h, 1.5);
-  ctx.fillStyle = 'rgba(255,255,255,.30)';             // …lightened / desaturated
+  ctx.fillStyle = 'rgba(255,255,255,.28)';             // …lightened panel
   rr(ctx, x, yt, trLen, h, 1.5);
   ctx.strokeStyle = 'rgba(20,22,30,.55)'; ctx.lineWidth = 1;
-  ctx.strokeRect(x + 0.5, yt + 0.5, trLen - 1, h - 1); // thin trailer outline
-  ctx.fillStyle = car.color;                           // cab, slightly lower roof
-  rr(ctx, x + trLen + 1.2, yt + h * 0.08, cabLen, h * 0.84, 2);
-  if (len > 9) {                                       // cab windshield band
-    ctx.fillStyle = 'rgba(15,23,38,.8)';
-    ctx.fillRect(x + trLen + 1.2 + cabLen * 0.52, yt + h * 0.16,
+  ctx.strokeRect(x + 0.5, yt + 0.5, Math.max(1, trLen - 1), Math.max(1, h - 1)); // thin outline
+
+  ctx.fillStyle = car.color;                           // cab (rounded front)
+  const cabX = x + trLen + gap;
+  carBody(ctx, cabX, yt + h * 0.05, cabLen, h * 0.90);
+  ctx.fill();
+  if (len > 11) {                                      // cab windshield band
+    ctx.fillStyle = 'rgba(18,28,46,.82)';
+    ctx.fillRect(cabX + cabLen * 0.46, yt + h * 0.16,
                  Math.max(1, cabLen * 0.3), h * 0.66);
+    ctx.fillStyle = 'rgba(150,180,210,.14)';           // glass glint
+    ctx.fillRect(cabX + cabLen * 0.46, yt + h * 0.16,
+                 Math.max(1, cabLen * 0.3), Math.max(1, h * 0.22));
   }
+
   drawVehicleLights(car, x, len, yt, h, blink);
 }
 
@@ -1869,11 +2141,14 @@ function bindUI() {
   });
   $('cars').addEventListener('input', e => { sim.targetCars = +e.target.value; updateLabels(); });
   $('speed').addEventListener('input', e => { sim.speedMph = +e.target.value; updateLabels(); });
-  $('lanes').addEventListener('change', e => { sim.lanes = +e.target.value; updateLabels(); resetSim(); });
-  // Mix sliders re-roll the existing fleet so the change is visible at once.
-  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; retuneFleet(); updateLabels(); });
-  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; retuneFleet(); updateLabels(); });
-  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; retuneFleet(); updateLabels(); });
+  // Lane add/remove changes the road IN PLACE — never resets the running sim.
+  $('lanes').addEventListener('change', e => { applyLaneCount(+e.target.value); });
+  // Mix sliders affect only cars spawned afterwards (makeCar reads the current
+  // sliders); existing vehicles keep the profile/truck/colour they were born
+  // with, so the on-screen composition shifts gradually as the fleet turns over.
+  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; updateLabels(); });
+  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; updateLabels(); });
+  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; updateLabels(); });
   $('meterOn').addEventListener('change', e => { sim.meterOn = e.target.checked; sim.meterTimer = 0; });
   $('meterRate').addEventListener('input', e => { sim.meterInterval = +e.target.value; updateLabels(); });
   $('mergeShape').addEventListener('change', e => { sim.mergeShape = e.target.value; resetSim(); });
