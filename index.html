@@ -501,7 +501,7 @@ const PROFILES = {
 const SCENARIOS = {
   highway: {
     label: 'Highway with On-Ramp',
-    desc: 'Closed 200-cell ring shown as a strip; cars wrap right → left. Metered on-ramp feeds traffic.',
+    desc: 'Open 200-cell mainline: traffic enters at the left edge and exits at the right. A metered on-ramp feeds a second stream.',
     laneOptions: [2, 3, 4], defaultLanes: 3,
     speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
     hasRamp: true, onRampCell: 140, hasOffRamp: false,
@@ -509,7 +509,7 @@ const SCENARIOS = {
   },
   interchange: {
     label: 'Highway Interchange',
-    desc: 'Adds an off-ramp at cell 60 before the on-ramp at 140. Exiting cars weave right and respawn via the ramp queue.',
+    desc: 'Adds an off-ramp at cell 60 before the on-ramp at 140. Exiting cars weave right and peel off; the rest flow on to the right edge.',
     laneOptions: [2, 3, 4], defaultLanes: 3,
     speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
     hasRamp: true, onRampCell: 140, hasOffRamp: true, offRampCell: 60,
@@ -517,7 +517,7 @@ const SCENARIOS = {
   },
   city: {
     label: 'City Arterial',
-    desc: 'Arterial street with signals at cells 50 / 110 / 170. Internally still a ring; cars spawn at the left edge.',
+    desc: 'Arterial street with signals at cells 50 / 110 / 170. Cars enter at the left edge, stop-and-go through the lights, and exit at the right.',
     laneOptions: [1, 2], defaultLanes: 2,
     speedRange: [25, 45], speedStep: 5, defaultSpeed: 35,
     hasRamp: false, hasOffRamp: false,
@@ -873,8 +873,12 @@ function spawnStep() {
     // Highway/interchange: the metered on-ramp is a SECONDARY inflow. It keeps a
     // modest standing queue (so the meter and merge always have something to do)
     // but no longer carries the whole population — the left edge is primary.
+    // The standing queue is capped at a handful of cars: it must never absorb
+    // the whole population deficit, or it would starve the left-edge inflow
+    // (spawnLeftEdge counts queued cars toward the target) while the ramp can
+    // only release one car per tick — capping the road far below target.
     const pop = sim.cars.length;
-    const want = Math.max(0, target - pop);
+    const want = Math.min(6, Math.max(0, target - pop));
     if (sim.rampQueue < want && Math.random() < 0.5) sim.rampQueue++;
     else if (sim.rampQueue > want) sim.rampQueue = want; // slider dropped: drain off-road queue
 
@@ -891,10 +895,12 @@ function spawnStep() {
     }
   }
 
-  // Primary inflow at the left edge (all scenarios). Drive the population toward
-  // target gradually: aim to close a small fraction of the deficit per tick.
+  // Primary inflow at the left edge (all scenarios). Drives the population
+  // toward target gradually: closes a small fraction of the deficit per tick,
+  // then holds (deficit→0 ⇒ inflow→0). Surplus, when the slider drops, simply
+  // drains out the right edge as cars reach the far side — never yanked from
+  // mid-road. So convergence is fully handled by left inflow + right outflow.
   spawnLeftEdge(target);
-  convergePopulation(target);
 }
 
 // Inject fresh cars at the leftmost cells, never over target and never
@@ -927,45 +933,11 @@ function spawnLeftEdge(target) {
   }
 }
 
-// Population convergence is now handled entirely by the open-road flow:
-//   - below target  → spawnLeftEdge() feeds more cars in from the LEFT, at a
-//                      rate proportional to the deficit, until target is reached;
-//   - above target  → the left-edge inflow throttles to zero (deficit ≤ 0) and
-//                      the surplus DRAINS OUT THE RIGHT naturally as cars reach
-//                      the far edge — no car is ever yanked from mid-screen.
-// This function is intentionally a no-op: the user does NOT want cars randomly
-// inserted into the middle of the road or randomly deleted to hit the slider
-// instantly. It is kept so existing call sites remain valid.
-function convergePopulation(target) {
-  /* no-op: see comment above — inflow at the left edge and outflow at the right
-     edge converge the population on their own, gradually and visibly. */
-}
 function releaseRampCar(entry) {
   const car = makeCar(rampLaneIdx(), entry, 1); // re-rolls profile & exit chance
   sim.cars.push(car);
   sim.grid[rampLaneIdx()][entry] = sim.cars.length - 1;
   sim.rampQueue--;
-}
-
-//──────────────────────────── Fleet composition ────────────────────────────
-// Assign a driver profile to an existing car, refreshing every profile-derived
-// field (behavior params, personal speed factor, paint color).
-function setCarProfile(car, name) {
-  car.profName = name;
-  car.prof = PROFILES[name];
-  car.speedFactor = rollSpeedFactor(name);
-  car.color = carColor(name, car.isTruck);
-}
-
-// Intentionally a no-op. Driver/traffic % sliders (trucks, aggressive, passive)
-// must NEVER mutate cars already on the road — existing vehicles keep the
-// profile, truck status, speed factor and color they were born with. The new
-// mix takes effect only through cars spawned afterwards (makeCar reads the
-// current sliders), so the on-screen composition shifts gradually as new cars
-// enter at the left and old ones exit at the right. This function is kept
-// solely because the UI slider handlers still call retuneFleet().
-function retuneFleet() {
-  /* no-op — see comment above: existing cars are never re-rolled by sliders. */
 }
 
 //──────────────────────────── Sim tick ────────────────────────────
@@ -1949,10 +1921,12 @@ function bindUI() {
   $('cars').addEventListener('input', e => { sim.targetCars = +e.target.value; updateLabels(); });
   $('speed').addEventListener('input', e => { sim.speedMph = +e.target.value; updateLabels(); });
   $('lanes').addEventListener('change', e => { sim.lanes = +e.target.value; updateLabels(); resetSim(); });
-  // Mix sliders re-roll the existing fleet so the change is visible at once.
-  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; retuneFleet(); updateLabels(); });
-  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; retuneFleet(); updateLabels(); });
-  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; retuneFleet(); updateLabels(); });
+  // Mix sliders affect only cars spawned afterwards (makeCar reads the current
+  // sliders); existing vehicles keep the profile/truck/colour they were born
+  // with, so the on-screen composition shifts gradually as the fleet turns over.
+  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; updateLabels(); });
+  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; updateLabels(); });
+  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; updateLabels(); });
   $('meterOn').addEventListener('change', e => { sim.meterOn = e.target.checked; sim.meterTimer = 0; });
   $('meterRate').addEventListener('input', e => { sim.meterInterval = +e.target.value; updateLabels(); });
   $('mergeShape').addEventListener('change', e => { sim.mergeShape = e.target.value; resetSim(); });
