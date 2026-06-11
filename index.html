@@ -6,190 +6,391 @@
 <title>Traffic Simulator — NaSch Cellular Automaton</title>
 <style>
   :root{
-    --bg:#1e1f24; --panel:#26272d; --panel2:#2d2e35; --border:#3a3b44;
-    --text:#e6e6ea; --dim:#9a9ba6; --accent:#4da3ff;
-    --good:#39c46a; --warn:#e6c54a; --bad:#e85149;
+    --bg:#0c0e13; --bg-glow:rgba(64,118,255,.07);
+    --panel:#14171f; --panel-2:#1a1e29; --panel-3:#222736;
+    --border:#252b39; --border-2:#313849;
+    --text:#e9ebf2; --dim:#969cad; --faint:#697084;
+    --accent:#58a6ff; --accent-2:#3ddad0; --accent-soft:rgba(88,166,255,.14);
+    --accent-grad:linear-gradient(90deg,#58a6ff,#3ddad0);
+    --good:#3ecf6e; --warn:#f0c24b; --bad:#f0544a;
+    --track:#272d3d;
+    --r-sm:8px; --r-md:12px; --r-lg:16px;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 12px 32px -18px rgba(0,0,0,.65);
+    --ring:0 0 0 3px rgba(88,166,255,.35);
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
-    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-  #app{display:grid;grid-template-columns:1fr 280px;grid-template-rows:auto 1fr;
-    height:100%;gap:10px;padding:10px}
-  #canvasWrap{grid-column:1;grid-row:1;background:var(--panel);border:1px solid var(--border);
-    border-radius:10px;padding:8px;min-width:0}
-  #canvas{display:block;width:100%;height:380px;border-radius:6px}
-  #controls{grid-column:1;grid-row:2;background:var(--panel);border:1px solid var(--border);
-    border-radius:10px;padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px 22px;
-    align-content:flex-start;overflow:auto}
-  #sidebar{grid-column:2;grid-row:1 / span 2;background:var(--panel);border:1px solid var(--border);
-    border-radius:10px;padding:14px;overflow:auto}
-  h1{font-size:15px;margin:0 0 4px;font-weight:600;letter-spacing:.3px}
-  h2{font-size:13px;margin:0 0 10px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
-  .ctl{display:flex;flex-direction:column;gap:4px;min-width:130px}
-  .ctl.row{flex-direction:row;align-items:center;gap:8px;min-width:0}
-  .ctl label{font-size:12px;color:var(--dim);white-space:nowrap}
-  .ctl .val{color:var(--accent);font-variant-numeric:tabular-nums}
-  .ctl.disabled{opacity:.32;pointer-events:none}
-  select,button{background:var(--panel2);color:var(--text);border:1px solid var(--border);
-    border-radius:6px;padding:5px 9px;font:inherit;cursor:pointer}
-  button:hover,select:hover{border-color:var(--accent)}
-  button.primary{background:var(--accent);border-color:var(--accent);color:#10131a;font-weight:600}
-  input[type=range]{width:150px;accent-color:var(--accent);cursor:pointer}
-  input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
-  .metric{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
-    padding:7px 9px;margin-bottom:6px;background:var(--panel2);border-radius:7px;cursor:help}
-  .metric .mlabel{font-size:12px;color:var(--dim)}
-  .metric .mval{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
-  .metric.sub{background:none;padding:2px 9px 2px 20px;margin-bottom:2px}
-  .metric.sub .mval{font-weight:400;font-size:12px}
-  .dotA,.dotN,.dotP{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
-  .dotA{background:#ff6a5e}.dotN{background:#c9c9d2}.dotP{background:#6ea8e8}
-  #gaugeWrap{height:10px;background:#191a1f;border-radius:5px;overflow:hidden;margin-top:6px}
-  #gaugeBar{height:100%;width:0%;background:var(--good);transition:width .4s,background .4s}
-  #spark{width:100%;height:48px;background:#191a1f;border-radius:7px;margin-top:4px}
-  .sectionGap{height:12px}
-  #scenarioDesc{font-size:11px;color:var(--dim);max-width:320px}
+  html{height:100%}
+  body{margin:0;min-height:100%;color:var(--text);
+    background:var(--bg)
+      radial-gradient(900px 420px at 18% -8%, var(--bg-glow), transparent 65%) no-repeat fixed;
+    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  ::selection{background:rgba(88,166,255,.35)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+  /* ── Layout ─────────────────────────────────────────────── */
+  #app{display:grid;grid-template-columns:minmax(0,1fr) 304px;grid-template-rows:auto auto auto;
+    gap:14px;padding:16px 18px 22px;max-width:1320px;margin:0 auto}
+  #topbar{grid-column:1 / -1}
+  #canvasWrap{grid-column:1;grid-row:2}
+  #controls{grid-column:1;grid-row:3}
+  #sidebar{grid-column:2;grid-row:2 / span 2}
+
+  /* ── Header ─────────────────────────────────────────────── */
+  #topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{flex:none;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;
+    background:var(--accent-grad);color:#0a1018;
+    box-shadow:0 2px 10px -2px rgba(88,166,255,.55)}
+  h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px;line-height:1.2}
+  .brandSub{font-size:11.5px;color:var(--faint);letter-spacing:.3px}
+  .topActions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+  .chip{display:inline-flex;align-items:center;gap:8px;padding:6px 13px;border-radius:999px;
+    background:var(--panel-2);border:1px solid var(--border);font-size:12px;color:var(--dim);
+    transition:border-color .25s}
+  .chipDot{width:7px;height:7px;border-radius:50%;background:var(--good);
+    box-shadow:0 0 8px var(--good);animation:pulse 2.2s ease-in-out infinite}
+  .chip.paused .chipDot{background:var(--warn);box-shadow:0 0 8px var(--warn);animation:none}
+  .chip #statusState{color:var(--text);font-weight:600}
+  .chipSep{color:var(--faint)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ── Buttons ────────────────────────────────────────────── */
+  .btn{display:inline-flex;align-items:center;gap:7px;padding:7px 15px;border-radius:9px;
+    background:var(--panel-3);color:var(--text);border:1px solid var(--border-2);
+    font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+    transition:background .15s,border-color .15s,transform .1s,box-shadow .2s,filter .15s}
+  .btn:hover{border-color:var(--accent);background:#283045}
+  .btn:active{transform:translateY(1px)}
+  .btn svg{flex:none}
+  .btn.primary{background:var(--accent-grad);border-color:transparent;color:#0a1018;
+    box-shadow:0 2px 12px -3px rgba(88,166,255,.5);min-width:104px;justify-content:center}
+  .btn.primary:hover{filter:brightness(1.1)}
+  .btn.primary.paused{background:linear-gradient(90deg,#3ecf6e,#37dca6);
+    box-shadow:0 2px 12px -3px rgba(62,207,110,.5)}
+
+  /* ── Canvas card ────────────────────────────────────────── */
+  #canvasWrap{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-lg);
+    padding:8px;min-width:0;box-shadow:var(--shadow)}
+  #canvas{display:block;width:100%;height:380px;border-radius:10px}
+
+  /* ── Controls ───────────────────────────────────────────── */
+  #controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(212px,1fr));gap:12px;
+    align-items:stretch;min-width:0}
+  .group{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-md);
+    padding:13px 15px 15px;display:flex;flex-direction:column;gap:13px;box-shadow:var(--shadow)}
+  .group>h3{margin:0;font-size:10.5px;font-weight:700;color:var(--faint);
+    text-transform:uppercase;letter-spacing:1.4px}
+  .hint{margin:-4px 0 0;font-size:11px;color:var(--faint)}
+  #scenarioDesc{margin:0;font-size:11.5px;line-height:1.5;color:var(--dim)}
+
+  .ctl{display:flex;flex-direction:column;gap:7px;min-width:0}
+  .ctl>label{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--dim);
+    white-space:nowrap;min-width:0}
+  .ctl.disabled{opacity:.35;filter:saturate(.3);pointer-events:none}
+  .ctl.disabled,.ctl.disabled *{cursor:not-allowed}
+  .group:has(.ctl.disabled):not(:has(.ctl:not(.disabled)))>h3{opacity:.45}
+
+  .val{display:inline-block;margin-left:auto;padding:1px 9px;border-radius:999px;
+    background:var(--accent-soft);color:#8ec3ff;font-size:11px;font-weight:600;
+    font-variant-numeric:tabular-nums;letter-spacing:.2px;
+    transition:background .25s,color .25s}
+  .val:empty{display:none}
+  @keyframes bump{0%{transform:scale(1.16);background:rgba(88,166,255,.4);color:#fff}
+    100%{transform:scale(1)}}
+  .val.bump{animation:bump .35s ease}
+
+  /* Selects */
+  select{width:100%;appearance:none;-webkit-appearance:none;
+    background:var(--panel-3) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23969cad' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+      no-repeat right 11px center;
+    color:var(--text);border:1px solid var(--border-2);border-radius:9px;
+    padding:7px 30px 7px 11px;font:inherit;font-size:13px;cursor:pointer;
+    transition:border-color .15s,background-color .15s}
+  select:hover{border-color:var(--accent)}
+  select:focus-visible{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+
+  /* Range sliders */
+  input[type=range]{appearance:none;-webkit-appearance:none;width:100%;height:20px;margin:0;
+    background:transparent;cursor:pointer}
+  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:999px;
+    background:linear-gradient(90deg,var(--accent) 0%,var(--accent-2) var(--p,0%),
+      var(--track) var(--p,0%),var(--track) 100%)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+    width:16px;height:16px;margin-top:-5px;border-radius:50%;border:none;background:#f4f7ff;
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.25);
+    transition:transform .15s,box-shadow .2s}
+  input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.18)}
+  input[type=range]:active::-webkit-slider-thumb{transform:scale(1.32);
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 6px rgba(88,166,255,.22)}
+  input[type=range]:focus-visible{outline:none}
+  input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 1px 4px rgba(0,0,0,.55),var(--ring)}
+  input[type=range]::-moz-range-track{height:6px;border-radius:999px;background:var(--track)}
+  input[type=range]::-moz-range-progress{height:6px;border-radius:999px;background:var(--accent-grad)}
+  input[type=range]::-moz-range-thumb{width:16px;height:16px;border:none;border-radius:50%;
+    background:#f4f7ff;box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.25);
+    transition:transform .15s,box-shadow .2s}
+  input[type=range]:hover::-moz-range-thumb{transform:scale(1.18)}
+  input[type=range]:active::-moz-range-thumb{transform:scale(1.32);
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 6px rgba(88,166,255,.22)}
+  input[type=range]:focus-visible::-moz-range-thumb{box-shadow:0 1px 4px rgba(0,0,0,.55),var(--ring)}
+
+  /* Toggle switches (real checkbox stays for a11y) */
+  .toggle{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text);
+    cursor:pointer;position:relative;white-space:nowrap;min-width:0}
+  .toggle input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+  .tg{flex:none;width:36px;height:20px;border-radius:999px;background:var(--track);
+    border:1px solid var(--border-2);position:relative;
+    transition:background .2s,border-color .2s}
+  .tg::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;
+    border-radius:50%;background:#aab2c5;box-shadow:0 1px 3px rgba(0,0,0,.4);
+    transition:transform .2s cubic-bezier(.22,1.2,.36,1),background .2s}
+  .toggle:hover .tg{border-color:var(--accent)}
+  .toggle input:checked+.tg{background:var(--accent);border-color:var(--accent)}
+  .toggle input:checked+.tg::after{transform:translateX(16px);background:#fff}
+  .toggle input:focus-visible+.tg{box-shadow:var(--ring)}
+
+  /* ── Sidebar / metrics ──────────────────────────────────── */
+  #sidebar{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-lg);
+    padding:15px;display:flex;flex-direction:column;gap:10px;min-width:0;
+    box-shadow:var(--shadow);align-self:start}
+  h2{margin:0 0 2px;font-size:10.5px;font-weight:700;color:var(--faint);
+    text-transform:uppercase;letter-spacing:1.4px}
+  .card{background:var(--panel-2);border:1px solid var(--border);border-radius:var(--r-sm);
+    padding:10px 12px;min-width:0}
+  .card[title]{cursor:help}
+  .mlabel{font-size:10.5px;font-weight:600;color:var(--dim);
+    text-transform:uppercase;letter-spacing:.9px}
+
+  .card.hero{background:linear-gradient(180deg,var(--panel-3),var(--panel-2));
+    border-color:var(--border-2);padding:12px 14px 13px}
+  .heroTop{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  .heroVal{font-size:30px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;
+    transition:color .5s}
+  .heroUnit{font-size:11.5px;font-weight:500;color:var(--faint);margin-left:3px}
+  #gaugeWrap{position:relative;height:12px;margin-top:11px;border-radius:999px;
+    background:#0e1118;border:1px solid var(--border);overflow:hidden}
+  #gaugeBar{height:100%;width:0%;border-radius:999px;background:var(--good);
+    transition:width .6s cubic-bezier(.22,1,.36,1),background .6s}
+  #gaugeWrap::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(90deg,transparent 0,transparent calc(25% - 1px),
+      rgba(255,255,255,.13) calc(25% - 1px),rgba(255,255,255,.13) 25%)}
+  .gaugeScale{display:flex;justify-content:space-between;margin-top:6px;
+    font-size:9.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.7px}
+
+  .bigVal{display:block;margin-top:3px;font-size:23px;font-weight:700;line-height:1.15;
+    font-variant-numeric:tabular-nums}
+  .legend{display:flex;flex-direction:column;gap:4px;margin-top:9px;padding-top:9px;
+    border-top:1px dashed var(--border-2)}
+  .legend>span{display:flex;align-items:center;font-size:11.5px;color:var(--dim);cursor:help}
+  .legend b{margin-left:auto;font-weight:600;color:var(--text);
+    font-variant-numeric:tabular-nums;font-size:11.5px}
+  .dotA,.dotN,.dotP{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;
+    margin-right:7px}
+  .dotA{background:#ff6a5e;box-shadow:0 0 6px rgba(255,106,94,.6)}
+  .dotN{background:#c9c9d2}
+  .dotP{background:#6ea8e8;box-shadow:0 0 6px rgba(110,168,232,.5)}
+
+  .miniGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .card.mini{display:flex;flex-direction:column;gap:4px;padding:9px 11px}
+  .miniVal{font-size:14.5px;font-weight:650;font-variant-numeric:tabular-nums;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .sparkCard{display:flex;flex-direction:column;gap:8px}
+  #spark{display:block;width:100%;height:60px;border-radius:6px;background:#0e1118}
+
+  /* ── Responsive / motion ────────────────────────────────── */
+  @media (max-width:980px){
+    #app{grid-template-columns:1fr;padding:12px}
+    #topbar,#canvasWrap,#controls,#sidebar{grid-column:1}
+    #canvasWrap{grid-row:auto}
+    #controls{grid-row:auto}
+    #sidebar{grid-row:auto}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{transition-duration:.01ms!important;
+      animation-duration:.01ms!important;animation-iteration-count:1!important}
+  }
 </style>
 </head>
 <body>
 <div id="app">
+
+  <header id="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2.1" stroke-linecap="round">
+          <path d="M6.6 2.5 4 17.5"/>
+          <path d="M13.4 2.5 16 17.5"/>
+          <path d="M10 3.4v2.4M10 8.8v2.4M10 14.2v2.4"/>
+        </svg>
+      </span>
+      <div>
+        <h1>Traffic Simulator</h1>
+        <div class="brandSub">Nagel–Schreckenberg cellular automaton</div>
+      </div>
+    </div>
+    <div class="topActions">
+      <span class="chip" id="statusChip" title="Active scenario and simulation state">
+        <span class="chipDot"></span>
+        <span id="statusScenario"></span>
+        <span class="chipSep">·</span>
+        <span id="statusState">Live</span>
+      </span>
+      <button id="btnPause" class="btn primary" aria-pressed="false"></button>
+      <button id="btnReset" class="btn">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+             stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+          <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.76"/>
+          <path d="M12.2 1.6v3h-3" stroke-linejoin="round"/>
+        </svg>
+        <span>Reset</span>
+      </button>
+    </div>
+  </header>
 
   <div id="canvasWrap">
     <canvas id="canvas"></canvas>
   </div>
 
   <div id="controls">
-    <div class="ctl">
-      <h1>Traffic Simulator</h1>
-      <div class="ctl row">
-        <button id="btnPause" class="primary">⏸ Pause</button>
-        <button id="btnReset">↺ Reset</button>
+
+    <section class="group">
+      <h3>Scenario</h3>
+      <div class="ctl" id="cScenario">
+        <label for="scenario">Road layout</label>
+        <select id="scenario">
+          <option value="highway">Highway with On-Ramp</option>
+          <option value="interchange">Highway Interchange</option>
+          <option value="city">City Arterial (Lights)</option>
+        </select>
+        <p id="scenarioDesc"></p>
       </div>
-    </div>
+    </section>
 
-    <div class="ctl" id="cScenario">
-      <label>Scenario</label>
-      <select id="scenario">
-        <option value="highway">Highway with On-Ramp</option>
-        <option value="interchange">Highway Interchange</option>
-        <option value="city">City Arterial (Lights)</option>
-      </select>
-      <div id="scenarioDesc"></div>
-    </div>
+    <section class="group">
+      <h3>Traffic</h3>
+      <div class="ctl" id="cCars">
+        <label for="cars">Number of cars <span class="val" id="carsVal"></span></label>
+        <input type="range" id="cars" min="0" max="200" value="60">
+      </div>
+      <div class="ctl" id="cSpeed">
+        <label for="speed">Speed limit <span class="val" id="speedVal"></span></label>
+        <input type="range" id="speed" min="35" max="75" step="5" value="65">
+      </div>
+      <div class="ctl" id="cTrucks">
+        <label for="trucks">Trucks <span class="val" id="trucksVal"></span></label>
+        <input type="range" id="trucks" min="0" max="30" value="10">
+      </div>
+      <div class="ctl" id="cLanes">
+        <label for="lanes">Lanes</label>
+        <select id="lanes"></select>
+      </div>
+    </section>
 
-    <div class="ctl" id="cCars">
-      <label>Number of cars <span class="val" id="carsVal"></span></label>
-      <input type="range" id="cars" min="0" max="200" value="60">
-    </div>
+    <section class="group">
+      <h3>Drivers</h3>
+      <div class="ctl" id="cAgg">
+        <label for="pctAgg"><i class="dotA"></i>Aggressive <span class="val" id="aggVal"></span></label>
+        <input type="range" id="pctAgg" min="0" max="50" value="15">
+      </div>
+      <div class="ctl" id="cPas">
+        <label for="pctPas"><i class="dotP"></i>Passive <span class="val" id="pasVal"></span></label>
+        <input type="range" id="pctPas" min="0" max="50" value="15">
+      </div>
+      <p class="hint">Everyone else drives normally.</p>
+    </section>
 
-    <div class="ctl" id="cSpeed">
-      <label>Speed limit <span class="val" id="speedVal"></span></label>
-      <input type="range" id="speed" min="35" max="75" step="5" value="65">
-    </div>
+    <section class="group">
+      <h3>Road</h3>
+      <div class="ctl" id="cMerge">
+        <label for="mergeShape">Merging lane shape</label>
+        <select id="mergeShape">
+          <option value="taper">Standard taper (10 cells)</option>
+          <option value="zipper">Zipper (15 cells)</option>
+          <option value="parallel">Parallel (25 cells)</option>
+        </select>
+      </div>
+      <div class="ctl" id="cMeter">
+        <label class="toggle"><input type="checkbox" id="meterOn"><span class="tg"></span>Ramp meter</label>
+        <label for="meterRate">Release: 1 car / <span class="val" id="meterRateVal"></span></label>
+        <input type="range" id="meterRate" min="4" max="30" value="8">
+      </div>
+      <div class="ctl" id="cIncident">
+        <label class="toggle"><input type="checkbox" id="incident"><span class="tg"></span>Incident (lane closure)</label>
+      </div>
+    </section>
 
-    <div class="ctl" id="cLanes">
-      <label>Lanes</label>
-      <select id="lanes"></select>
-    </div>
+    <section class="group">
+      <h3>Signals</h3>
+      <div class="ctl" id="cCycle">
+        <label for="cycleLen">Light cycle <span class="val" id="cycleVal"></span></label>
+        <input type="range" id="cycleLen" min="30" max="90" value="60">
+      </div>
+      <div class="ctl" id="cWave">
+        <label class="toggle"><input type="checkbox" id="greenWave"><span class="tg"></span>Green wave (synced lights)</label>
+      </div>
+    </section>
 
-    <div class="ctl" id="cTrucks">
-      <label>% Trucks <span class="val" id="trucksVal"></span></label>
-      <input type="range" id="trucks" min="0" max="30" value="10">
-    </div>
-
-    <div class="ctl" id="cAgg">
-      <label>% Aggressive drivers <span class="val" id="aggVal"></span></label>
-      <input type="range" id="pctAgg" min="0" max="50" value="15">
-    </div>
-
-    <div class="ctl" id="cPas">
-      <label>% Passive drivers <span class="val" id="pasVal"></span></label>
-      <input type="range" id="pctPas" min="0" max="50" value="15">
-    </div>
-
-    <div class="ctl" id="cMeter">
-      <label class="ctl row" style="min-width:0"><input type="checkbox" id="meterOn"> Ramp meter</label>
-      <label>Release: 1 car / <span class="val" id="meterRateVal"></span></label>
-      <input type="range" id="meterRate" min="4" max="30" value="8">
-    </div>
-
-    <div class="ctl" id="cMerge">
-      <label>Merging lane shape</label>
-      <select id="mergeShape">
-        <option value="taper">Standard taper (10 cells)</option>
-        <option value="zipper">Zipper (15 cells)</option>
-        <option value="parallel">Parallel (25 cells)</option>
-      </select>
-    </div>
-
-    <div class="ctl" id="cIncident">
-      <label class="ctl row" style="min-width:0"><input type="checkbox" id="incident"> Incident (lane closure)</label>
-    </div>
-
-    <div class="ctl" id="cCycle">
-      <label>Light cycle <span class="val" id="cycleVal"></span></label>
-      <input type="range" id="cycleLen" min="30" max="90" value="60">
-    </div>
-
-    <div class="ctl" id="cWave">
-      <label class="ctl row" style="min-width:0"><input type="checkbox" id="greenWave"> Green wave (synced lights)</label>
-    </div>
-
-    <div class="ctl" id="cWeather">
-      <label>Weather</label>
-      <select id="weather">
-        <option value="clear">Clear</option>
-        <option value="rain">Rain</option>
-        <option value="fog">Fog</option>
-      </select>
-    </div>
+    <section class="group">
+      <h3>Environment</h3>
+      <div class="ctl" id="cWeather">
+        <label for="weather">Weather</label>
+        <select id="weather">
+          <option value="clear">Clear</option>
+          <option value="rain">Rain</option>
+          <option value="fog">Fog</option>
+        </select>
+      </div>
+    </section>
   </div>
 
   <aside id="sidebar">
     <h2>Live Metrics</h2>
 
-    <div class="metric" title="Mean speed of all vehicles, converted from cells/tick to mph (1 cell/tick ≈ 16.8 mph).">
-      <span class="mlabel">Avg speed</span><span class="mval" id="mSpeed">–</span>
-    </div>
-    <div class="metric sub" title="Average speed of aggressive-profile drivers.">
-      <span class="mlabel"><i class="dotA"></i>Aggressive</span><span class="mval" id="mSpeedA">–</span>
-    </div>
-    <div class="metric sub" title="Average speed of normal-profile drivers.">
-      <span class="mlabel"><i class="dotN"></i>Normal</span><span class="mval" id="mSpeedN">–</span>
-    </div>
-    <div class="metric sub" title="Average speed of passive-profile drivers.">
-      <span class="mlabel"><i class="dotP"></i>Passive</span><span class="mval" id="mSpeedP">–</span>
-    </div>
-
-    <div class="metric" title="Vehicles per mile of road per lane (road is 200 cells × 7.5 m ≈ 0.93 mi).">
-      <span class="mlabel">Density</span><span class="mval" id="mDensity">–</span>
-    </div>
-
-    <div class="metric" title="Vehicles passing the sensor at cell 150, counted over the last 60 simulated seconds.">
-      <span class="mlabel">Throughput</span><span class="mval" id="mThroughput">–</span>
-    </div>
-
-    <div class="metric" style="flex-direction:column;align-items:stretch"
+    <div class="card hero"
          title="Congestion score: 100 × (1 − avg speed / speed limit). 0 = free flow, 100 = standstill.">
-      <span style="display:flex;justify-content:space-between">
-        <span class="mlabel">Traffic rating</span><span class="mval" id="mRating">–</span>
-      </span>
+      <div class="heroTop">
+        <span class="mlabel">Traffic rating</span>
+        <span class="heroVal"><span id="mRating">–</span><span class="heroUnit">/ 100</span></span>
+      </div>
       <div id="gaugeWrap"><div id="gaugeBar"></div></div>
+      <div class="gaugeScale"><span>Free flow</span><span>Standstill</span></div>
     </div>
 
-    <div class="metric" id="mQueueWrap"
-         title="Highway: vehicles waiting at the on-ramp (meter queue + acceleration lane). City: average stop events per vehicle in the last light cycle.">
-      <span class="mlabel" id="mQueueLabel">Ramp queue</span><span class="mval" id="mQueue">–</span>
+    <div class="card" title="Mean speed of all vehicles, converted from cells/tick to mph (1 cell/tick ≈ 16.8 mph).">
+      <span class="mlabel">Avg speed</span>
+      <span class="bigVal" id="mSpeed">–</span>
+      <div class="legend">
+        <span title="Average speed of aggressive-profile drivers."><i class="dotA"></i>Aggressive <b id="mSpeedA">–</b></span>
+        <span title="Average speed of normal-profile drivers."><i class="dotN"></i>Normal <b id="mSpeedN">–</b></span>
+        <span title="Average speed of passive-profile drivers."><i class="dotP"></i>Passive <b id="mSpeedP">–</b></span>
+      </div>
     </div>
 
-    <div class="metric" title="Lane-change maneuvers in the last 60 simulated seconds — a proxy for aggressive-driver churn.">
-      <span class="mlabel">Lane changes / min</span><span class="mval" id="mLaneCh">–</span>
+    <div class="miniGrid">
+      <div class="card mini" title="Vehicles per mile of road per lane (road is 200 cells × 7.5 m ≈ 0.93 mi).">
+        <span class="mlabel">Density</span><span class="miniVal" id="mDensity">–</span>
+      </div>
+      <div class="card mini" title="Vehicles passing the sensor at cell 150, counted over the last 60 simulated seconds.">
+        <span class="mlabel">Throughput</span><span class="miniVal" id="mThroughput">–</span>
+      </div>
+      <div class="card mini" id="mQueueWrap"
+           title="Highway: vehicles waiting at the on-ramp (meter queue + acceleration lane). City: average stop events per vehicle in the last light cycle.">
+        <span class="mlabel" id="mQueueLabel">Ramp queue</span><span class="miniVal" id="mQueue">–</span>
+      </div>
+      <div class="card mini" title="Lane-change maneuvers in the last 60 simulated seconds — a proxy for aggressive-driver churn.">
+        <span class="mlabel">Lane changes</span><span class="miniVal" id="mLaneCh">–</span>
+      </div>
     </div>
 
-    <div class="sectionGap"></div>
-    <h2>Avg speed — last 60 s</h2>
-    <canvas id="spark" width="248" height="48"
-      title="Sparkline of average speed (mph) sampled every 0.5 s over the last 60 simulated seconds."></canvas>
+    <div class="card sparkCard">
+      <span class="mlabel">Avg speed — last 60 s</span>
+      <canvas id="spark" width="248" height="60"
+        title="Sparkline of average speed (mph) sampled every 0.5 s over the last 60 simulated seconds."></canvas>
+    </div>
   </aside>
 </div>
 
@@ -836,7 +1037,14 @@ function updateMetrics() {
   $('mRating').textContent = fmt(rating, 0);
   const bar = $('gaugeBar');
   bar.style.width = (Number.isFinite(rating) ? rating : 0) + '%';
-  bar.style.background = rating < 33 ? 'var(--good)' : rating < 66 ? 'var(--warn)' : 'var(--bad)';
+  const band = !Number.isFinite(rating) || rating < 33 ? 0 : rating < 66 ? 1 : 2;
+  bar.style.background = [
+    'linear-gradient(90deg,#2cb863,#5fdc8f)',
+    'linear-gradient(90deg,#dcae33,#f6d36c)',
+    'linear-gradient(90deg,#df4a3f,#ff7d66)',
+  ][band];
+  $('mRating').style.color = Number.isFinite(rating)
+    ? ['var(--good)', 'var(--warn)', 'var(--bad)'][band] : 'var(--text)';
 
   if (cfg().hasRamp) {
     const onRamp = cars.filter(c => c.lane === rampLaneIdx()).length;
@@ -858,21 +1066,45 @@ function updateMetrics() {
 
 function drawSpark() {
   const cv = $('spark'), g = cv.getContext('2d');
-  g.clearRect(0, 0, cv.width, cv.height);
+  // Crisp at any zoom: back the canvas at devicePixelRatio resolution,
+  // sized from its CSS box (falls back to the attribute size pre-layout).
+  const sdpr = window.devicePixelRatio || 1;
+  const cw2 = cv.clientWidth || 248, ch2 = cv.clientHeight || 60;
+  const pw = Math.max(1, Math.round(cw2 * sdpr)), ph = Math.max(1, Math.round(ch2 * sdpr));
+  if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+  g.setTransform(sdpr, 0, 0, sdpr, 0, 0);
+  g.clearRect(0, 0, cw2, ch2);
+
   const data = sim.speedHistory;
   if (data.length < 2) return;
-  const max = Math.max(sim.speedMph, ...data) * 1.05;
-  g.strokeStyle = '#4da3ff'; g.lineWidth = 1.5; g.beginPath();
-  data.forEach((v, i) => {
-    const x = i / 119 * (cv.width - 4) + 2;
-    const y = cv.height - 3 - (v / max) * (cv.height - 8);
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  });
+  const max = Math.max(sim.speedMph, ...data) * 1.08;
+  const X = i => i / 119 * (cw2 - 8) + 4;
+  const Y = v => ch2 - 5 - (v / max) * (ch2 - 12);
+
+  // speed-limit dashed reference
+  g.strokeStyle = 'rgba(240,194,75,.4)'; g.lineWidth = 1; g.setLineDash([4, 4]);
+  g.beginPath(); g.moveTo(4, Y(sim.speedMph)); g.lineTo(cw2 - 4, Y(sim.speedMph));
+  g.stroke(); g.setLineDash([]);
+
+  // gradient area fill under the trace
+  const fill = g.createLinearGradient(0, 0, 0, ch2);
+  fill.addColorStop(0, 'rgba(88,166,255,.32)');
+  fill.addColorStop(1, 'rgba(88,166,255,0)');
+  g.beginPath();
+  data.forEach((v, i) => { i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)); });
+  g.lineTo(X(data.length - 1), ch2 - 2); g.lineTo(X(0), ch2 - 2); g.closePath();
+  g.fillStyle = fill; g.fill();
+
+  // the trace itself, with a glowing endpoint dot on the live sample
+  g.strokeStyle = '#58a6ff'; g.lineWidth = 1.6; g.lineJoin = 'round'; g.lineCap = 'round';
+  g.beginPath();
+  data.forEach((v, i) => { i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)); });
   g.stroke();
-  // speed-limit reference line
-  g.strokeStyle = 'rgba(230,197,74,.45)'; g.setLineDash([3, 3]); g.beginPath();
-  const yl = cv.height - 3 - (sim.speedMph / max) * (cv.height - 8);
-  g.moveTo(2, yl); g.lineTo(cv.width - 2, yl); g.stroke(); g.setLineDash([]);
+  const ex = X(data.length - 1), ey = Y(data[data.length - 1]);
+  g.fillStyle = 'rgba(88,166,255,.35)';
+  g.beginPath(); g.arc(ex, ey, 4.5, 0, 7); g.fill();
+  g.fillStyle = '#bcd9ff';
+  g.beginPath(); g.arc(ex, ey, 2, 0, 7); g.fill();
 }
 
 //──────────────────────────── Rendering ────────────────────────────
@@ -1561,10 +1793,43 @@ function drawWeatherOverlay() {
 //──────────────────────────── UI wiring ────────────────────────────
 function setDisabled(id, off) { $(id).classList.toggle('disabled', off); }
 
+const ICON_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">' +
+  '<rect x="3" y="2.5" width="3.5" height="11" rx="1.2"/><rect x="9.5" y="2.5" width="3.5" height="11" rx="1.2"/></svg>';
+const ICON_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">' +
+  '<path d="M5 3.2a1 1 0 0 1 1.53-.85l7 4.3a1 1 0 0 1 0 1.7l-7 4.3A1 1 0 0 1 5 11.8z"/></svg>';
+
+// Paint a slider's filled-track portion via the --p custom property
+// (the track background is a linear-gradient split at --p).
+function paintRange(el) {
+  const min = +el.min || 0, max = +el.max || 100;
+  const p = max > min ? (el.value - min) / (max - min) * 100 : 0;
+  el.style.setProperty('--p', p + '%');
+}
+function paintAllRanges() {
+  document.querySelectorAll('input[type=range]').forEach(paintRange);
+}
+// Brief highlight on the value pill belonging to a slider.
+function flashVal(el) {
+  const wrap = el.closest('.ctl');
+  const v = wrap && wrap.querySelector('.val');
+  if (!v) return;
+  v.classList.remove('bump'); void v.offsetWidth; v.classList.add('bump');
+}
+// Pause button + header status chip reflect the run state.
+function updatePauseUI() {
+  const b = $('btnPause');
+  b.classList.toggle('paused', sim.paused);
+  b.setAttribute('aria-pressed', String(sim.paused));
+  b.innerHTML = (sim.paused ? ICON_PLAY + '<span>Play</span>' : ICON_PAUSE + '<span>Pause</span>');
+  $('statusChip').classList.toggle('paused', sim.paused);
+  $('statusState').textContent = sim.paused ? 'Paused' : 'Live';
+}
+
 // Sync control availability/ranges to the active scenario.
 function syncControls() {
   const s = cfg();
   $('scenarioDesc').textContent = s.desc;
+  $('statusScenario').textContent = s.label;
 
   const sp = $('speed');
   sp.min = s.speedRange[0]; sp.max = s.speedRange[1]; sp.step = s.speedStep;
@@ -1593,6 +1858,9 @@ function updateLabels() {
   $('pasVal').textContent = sim.pctPas + '%';
   $('meterRateVal').textContent = sim.meterInterval + ' s';
   $('cycleVal').textContent = sim.cycleLen + ' s';
+  // Repaint every slider's filled track (covers programmatic value/min/max
+  // rewrites too, e.g. syncControls retargeting the speed slider).
+  paintAllRanges();
 }
 
 function bindUI() {
@@ -1616,9 +1884,17 @@ function bindUI() {
 
   $('btnPause').addEventListener('click', () => {
     sim.paused = !sim.paused;
-    $('btnPause').textContent = sim.paused ? '▶ Play' : '⏸ Pause';
+    updatePauseUI();
   });
   $('btnReset').addEventListener('click', resetSim);
+
+  // Micro-interactions shared by every range input: filled-track repaint
+  // and a brief highlight of the value pill while scrubbing.
+  document.querySelectorAll('input[type=range]').forEach(r => {
+    r.addEventListener('input', () => { paintRange(r); flashVal(r); });
+  });
+
+  updatePauseUI();
 }
 
 //──────────────────────────── Loops ────────────────────────────
