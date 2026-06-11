@@ -293,12 +293,39 @@ function rampEnd() { return cfg().onRampCell + rampLen() - 1; } // last usable a
 function densityCap() { return Math.floor(sim.lanes * N * 0.4); }
 function effTarget() { return Math.min(sim.targetCars, densityCap()); }
 
-// Speed limit in cells/tick, reduced by 1 in rain/fog (min 1).
-function vmaxEff() {
-  let v = Math.max(1, Math.round(sim.speedMph / MPH_PER_CELL));
-  if (sim.weather !== 'clear') v = Math.max(1, v - 1);
-  return v;
+/*
+ * Fractional speed-limit model.
+ * Posted limits rarely land on an integer number of cells/tick
+ * (65 mph = 3.87 cells/tick), and the old Math.round() mapping collapsed
+ * several slider steps onto the same integer vmax (55→3, 60/65/70/75→4),
+ * so most speed-slider movements had literally no effect. Instead:
+ *   - vmaxFloat() returns the real-valued limit in cells/tick; weather
+ *     subtracts a fractional amount (rain ≈ −8 mph, fog ≈ −17 mph).
+ *   - Each car carries a stable personal speedFactor (aggressive drivers run
+ *     a few mph over the limit, passive a few under, normal ≈ at it).
+ *   - Per tick a car's fractional top speed vf is realized probabilistically:
+ *     floor(vf), plus one extra cell with probability frac(vf). The
+ *     time-averaged top speed therefore equals vf exactly, so the reported
+ *     avg mph (v × 16.8) responds monotonically to every 5 mph slider step.
+ */
+function vmaxFloat() {
+  let v = sim.speedMph / MPH_PER_CELL;
+  if (sim.weather === 'rain') v -= 0.5;       // ≈ 8 mph slower in rain
+  else if (sim.weather === 'fog') v -= 1.0;   // ≈ 17 mph slower in fog
+  return Math.max(1, v);
 }
+// Integer convenience (rounded) — used for scan bounds, spawn seeds and the
+// green-wave timing, never for a car's per-tick top speed.
+function vmaxEff() { return Math.max(1, Math.round(vmaxFloat())); }
+// Realize a fractional speed as an integer cells/tick value for this tick.
+function ditherV(vf) { const f = Math.floor(vf); return f + (Math.random() < vf - f ? 1 : 0); }
+// Stable per-car desired-speed multiplier, drawn once per profile assignment.
+function rollSpeedFactor(profName) {
+  if (profName === 'aggressive') return 1.04 + Math.random() * 0.08; // ~3–8 mph over the limit
+  if (profName === 'passive')    return 0.90 + Math.random() * 0.06; // ~3–7 mph under
+  return 0.97 + Math.random() * 0.06;                                // ≈ at the limit
+}
+const TRUCK_VMAX = 3.0; // trucks governed at 3 cells/tick ≈ 50 mph regardless of limit
 // Randomization probability for a profile, +0.05 in rain/fog.
 function pEff(prof) { return prof.p + (sim.weather !== 'clear' ? 0.05 : 0); }
 
@@ -314,7 +341,7 @@ function lightPhases() {
 function lightOffset(i) {
   if (!sim.greenWave) return 0;
   const cells = cfg().lightCells[i] - cfg().lightCells[0];
-  return Math.round(cells / vmaxEff()) % sim.cycleLen;
+  return Math.round(cells / vmaxFloat()) % sim.cycleLen;
 }
 function lightState(i) {
   const ph = lightPhases();
@@ -338,7 +365,8 @@ function carColor(profName, isTruck) {
   if (profName === 'passive')    return `hsl(${h(205, 230)},${h(32, 50)}%,${h(55, 68)}%)`;
   return `hsl(${h(0, 360)},${h(8, 22)}%,${h(55, 80)}%)`;
 }
-// Create a car. Profile and truck status are permanent for its lifetime.
+// Create a car. Profile and truck status persist until the % sliders change,
+// at which point retuneFleet() may reassign them to match the new mix.
 function makeCar(lane, cell, v) {
   const isTruck = Math.random() * 100 < sim.pctTrucks;
   const profName = rollProfile(isTruck);
@@ -349,6 +377,7 @@ function makeCar(lane, cell, v) {
     id: sim.nextId++, lane, cell, v,
     prevCell: cell, prevLane: lane,
     profName, prof: PROFILES[profName], isTruck,
+    speedFactor: rollSpeedFactor(profName),
     exitChance, exiting: Math.random() < exitChance,
     cool: 0, age: 0, braking: false,
     color: carColor(profName, isTruck),
@@ -361,6 +390,10 @@ function buildGrid() {
   sim.grid = [];
   for (let l = 0; l < rows; l++) sim.grid.push(new Int16Array(N).fill(-1));
   if (sim.incident && cfg().hasIncident) sim.grid[sim.lanes - 1][INCIDENT_CELL] = -2;
+  // Cars are written after the incident marker on purpose: if the incident is
+  // toggled on while a car occupies INCIDENT_CELL, the car (an obstacle too)
+  // takes precedence, drives off normally, and the -2 marker reappears on the
+  // next rebuild — the grid is rebuilt every tick, so toggling is immediate.
   sim.cars.forEach((c, i) => { sim.grid[c.lane][c.cell] = i; });
 }
 function cellFree(lane, cell) { return sim.grid[lane][cell] === -1; }
@@ -384,7 +417,8 @@ function gapBehind(lane, cell, maxScan) {
 // end-of-ramp wall. Lights block ALL lanes at their cell; a yellow light only
 // blocks cars that are still outside stopping distance (d > v ⇒ must stop).
 function effGap(lane, cell, v) {
-  const scan = vmaxEff() + 6;
+  // Scan far enough to cover the fastest possible car (aggressive factor ≤ 1.12).
+  const scan = Math.ceil(vmaxFloat() * 1.15) + 6;
   let g = gapAhead(lane, cell, scan);
   const lights = cfg().lightCells;
   if (lights) {
@@ -473,14 +507,19 @@ function laneChangeStep() {
 // Parallel update: all speeds computed against pre-move positions, then all
 // cars advance, so v ≤ gap guarantees no collisions.
 function speedAndMoveStep() {
-  const vm = vmaxEff();
+  const vmf = vmaxFloat();
   const newV = new Array(sim.cars.length);
 
   for (let i = 0; i < sim.cars.length; i++) {
     const car = sim.cars[i];
     const prof = car.prof;
     car.age++;
-    const vmaxCar = car.isTruck ? Math.min(vm, 3) : vm; // trucks capped ≈55 mph
+    // Per-car fractional top speed: limit × personal factor, trucks governed
+    // at TRUCK_VMAX (≈50 mph). Dithered to an integer for this tick so the
+    // time-averaged top speed equals the fractional target (see vmaxFloat()).
+    let vf = vmf * car.speedFactor;
+    if (car.isTruck) vf = Math.min(vf, TRUCK_VMAX);
+    const vmaxCar = ditherV(Math.max(1, vf));
     const accelEvery = Math.max(prof.accelEvery, car.isTruck ? 2 : 1);
 
     // 1. Accelerate (passive drivers & trucks only every other tick)
@@ -548,9 +587,12 @@ function spawnStep() {
   const pop = sim.cars.length;
 
   if (cfg().hasRamp) {
-    // Highway: the on-ramp is the only entry. Demand accumulates in the queue.
+    // Highway: small deficits flow in realistically through the on-ramp.
     if (pop + sim.rampQueue < target) sim.rampQueue++;
-    else if (pop + sim.rampQueue > target && sim.rampQueue > 0) sim.rampQueue--;
+    else if (pop + sim.rampQueue > target) {
+      // Slider dropped: drain the waiting (off-road) queue immediately.
+      sim.rampQueue = Math.max(0, target - pop);
+    }
 
     const entry = rampStart();
     const entryFree = cellFree(rampLaneIdx(), entry);
@@ -564,7 +606,7 @@ function spawnStep() {
       releaseRampCar(entry); // free merging: one per tick as space allows
     }
   } else {
-    // City: cars enter at the left edge when below target.
+    // City: small deficits enter at the left edge, one car per tick.
     if (pop < target) {
       const lanes = [...Array(sim.lanes).keys()];
       for (const l of lanes.sort(() => Math.random() - 0.5)) {
@@ -577,12 +619,124 @@ function spawnStep() {
       }
     }
   }
+  convergePopulation(target);
+}
+
+// Fast convergence to the "Number of cars" slider. The ramp / left-edge
+// trickle adds at most 1 car/tick and the wrap-point despawn removes only
+// cars that happen to cross the seam, so a big slider move used to take
+// minutes to show. When the population is more than a couple of cars off
+// target we close ~1/3 of the gap per tick (geometric convergence: a full
+// 0↔200 jump settles within ~10 simulated seconds):
+//   - below target: spawn into sparse mainline stretches (free cell with
+//     clear space ahead and behind, entry speed capped by the gap ahead so
+//     the insertion is collision-safe and doesn't shock followers);
+//   - above target: despawn randomly chosen cars, preferring those near the
+//     wrap seam where a disappearance is least visible.
+function convergePopulation(target) {
+  const queued = cfg().hasRamp ? sim.rampQueue : 0;
+  const deficit = target - sim.cars.length - queued;
+
+  if (deficit > 2) {
+    let toSpawn = Math.ceil(deficit / 3);
+    let attempts = toSpawn * 10;
+    while (toSpawn > 0 && attempts-- > 0) {
+      const lane = Math.floor(Math.random() * sim.lanes);
+      const cell = Math.floor(Math.random() * N);
+      if (!cellFree(lane, cell)) continue;
+      const ahead = gapAhead(lane, cell, 8);
+      if (ahead < 1 || gapBehind(lane, cell, 3) < 2) continue; // sparse stretches only
+      const car = makeCar(lane, cell, Math.max(1, Math.min(vmaxEff(), ahead)));
+      sim.cars.push(car);
+      sim.grid[lane][cell] = sim.cars.length - 1;
+      toSpawn--;
+    }
+  } else if (sim.cars.length - target > 2) {
+    let toRemove = Math.ceil((sim.cars.length - target) / 3);
+    const seam = [], rest = [];
+    sim.cars.forEach((c, i) => (c.cell >= N - 20 || c.cell < 5 ? seam : rest).push(i));
+    const doomed = new Set();
+    for (const pool of [seam, rest]) {
+      while (toRemove > 0 && pool.length) {
+        doomed.add(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+        toRemove--;
+      }
+    }
+    if (doomed.size) {
+      sim.cars = sim.cars.filter((_, i) => !doomed.has(i));
+      buildGrid(); // indices shifted
+    }
+  }
 }
 function releaseRampCar(entry) {
   const car = makeCar(rampLaneIdx(), entry, 1); // re-rolls profile & exit chance
   sim.cars.push(car);
   sim.grid[rampLaneIdx()][entry] = sim.cars.length - 1;
   sim.rampQueue--;
+}
+
+//──────────────────────────── Fleet composition ────────────────────────────
+// Assign a driver profile to an existing car, refreshing every profile-derived
+// field (behavior params, personal speed factor, paint color).
+function setCarProfile(car, name) {
+  car.profName = name;
+  car.prof = PROFILES[name];
+  car.speedFactor = rollSpeedFactor(name);
+  car.color = carColor(name, car.isTruck);
+}
+
+// Re-roll the existing fleet so the truck/profile mix matches the sliders
+// immediately. Without this, % sliders only affected newly spawned cars, and
+// on a ring with low turnover the fleet kept its old mix forever, so the
+// sliders appeared dead. Converts the minimum number of randomly chosen cars;
+// the "trucks are never aggressive" rule is preserved.
+function retuneFleet() {
+  const cars = sim.cars, n = cars.length;
+  if (!n) return;
+  const pick = pool => pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+
+  // 1. Truck share.
+  const wantTrucks = Math.round(n * sim.pctTrucks / 100);
+  const nTrucks = cars.filter(c => c.isTruck).length;
+  if (nTrucks > wantTrucks) {
+    const pool = cars.filter(c => c.isTruck);
+    for (let k = nTrucks - wantTrucks; k > 0 && pool.length; k--) {
+      const c = pick(pool);
+      c.isTruck = false;
+      setCarProfile(c, c.profName); // refresh color & speed factor as a car
+    }
+  } else if (nTrucks < wantTrucks) {
+    const pool = cars.filter(c => !c.isTruck);
+    for (let k = wantTrucks - nTrucks; k > 0 && pool.length; k--) {
+      const c = pick(pool);
+      c.isTruck = true;
+      c.v = Math.min(c.v, Math.floor(TRUCK_VMAX)); // governed cap applies now
+      setCarProfile(c, c.profName === 'aggressive' ? 'normal' : c.profName);
+    }
+  }
+
+  // 2. Aggressive share (drawn from non-truck, non-aggressive cars).
+  const wantAgg = Math.round(n * sim.pctAgg / 100);
+  const nAgg = cars.filter(c => c.profName === 'aggressive').length;
+  if (nAgg > wantAgg) {
+    const pool = cars.filter(c => c.profName === 'aggressive');
+    for (let k = nAgg - wantAgg; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'normal');
+  } else if (nAgg < wantAgg) {
+    const pool = cars.filter(c => !c.isTruck && c.profName === 'normal');
+    pool.push(...cars.filter(c => !c.isTruck && c.profName === 'passive'));
+    for (let k = wantAgg - nAgg; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'aggressive');
+  }
+
+  // 3. Passive share (trucks may be passive).
+  const wantPas = Math.round(n * sim.pctPas / 100);
+  const nPas = cars.filter(c => c.profName === 'passive').length;
+  if (nPas > wantPas) {
+    const pool = cars.filter(c => c.profName === 'passive');
+    for (let k = nPas - wantPas; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'normal');
+  } else if (nPas < wantPas) {
+    const pool = cars.filter(c => c.profName === 'normal');
+    for (let k = wantPas - nPas; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'passive');
+  }
 }
 
 //──────────────────────────── Sim tick ────────────────────────────
@@ -602,8 +756,9 @@ function tick() {
 
 //──────────────────────────── Reset / seeding ────────────────────────────
 // Reset rebuilds the world. The road is pre-seeded to the target population
-// (uniformly spread); afterwards all population changes flow through the
-// on-ramp / left-edge spawn and wrap-point despawn rules.
+// (uniformly spread); afterwards small population changes flow through the
+// on-ramp / left-edge spawn and wrap-point despawn rules, while large slider
+// moves converge quickly via convergePopulation().
 function resetSim() {
   sim.cars = [];
   sim.rampQueue = 0;
@@ -963,9 +1118,10 @@ function bindUI() {
   $('cars').addEventListener('input', e => { sim.targetCars = +e.target.value; updateLabels(); });
   $('speed').addEventListener('input', e => { sim.speedMph = +e.target.value; updateLabels(); });
   $('lanes').addEventListener('change', e => { sim.lanes = +e.target.value; updateLabels(); resetSim(); });
-  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; updateLabels(); });
-  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; updateLabels(); });
-  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; updateLabels(); });
+  // Mix sliders re-roll the existing fleet so the change is visible at once.
+  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; retuneFleet(); updateLabels(); });
+  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; retuneFleet(); updateLabels(); });
+  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; retuneFleet(); updateLabels(); });
   $('meterOn').addEventListener('change', e => { sim.meterOn = e.target.checked; sim.meterTimer = 0; });
   $('meterRate').addEventListener('input', e => { sim.meterInterval = +e.target.value; updateLabels(); });
   $('mergeShape').addEventListener('change', e => { sim.mergeShape = e.target.value; resetSim(); });
