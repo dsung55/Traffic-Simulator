@@ -270,7 +270,7 @@
       <div class="gaugeScale"><span>Free flow</span><span>Standstill</span></div>
     </div>
 
-    <div class="card speedCard" title="Mean speed of all vehicles, converted from cells/tick to mph (1 cell/tick ≈ 16.8 mph).">
+    <div class="card speedCard" title="Mean speed of all vehicles, converted from cells/second to mph (1 cell/s ≈ 16.8 mph).">
       <div class="speedMain">
         <span class="mlabel">Avg speed</span>
         <span class="bigVal" id="mSpeed">–</span>
@@ -283,10 +283,10 @@
     </div>
 
     <div class="miniGrid">
-      <div class="card mini" title="Vehicles per mile of road per lane (road is 200 cells × 7.5 m ≈ 0.93 mi).">
+      <div class="card mini" title="Vehicles per mile of road per lane (road is 84 cells × 7.5 m ≈ 0.39 mi).">
         <span class="mlabel">Density</span><span class="miniVal" id="mDensity">–</span>
       </div>
-      <div class="card mini" title="Vehicles passing the sensor at cell 150, counted over the last 60 simulated seconds.">
+      <div class="card mini" title="Vehicles passing the sensor at cell 63, counted over the last 60 simulated seconds.">
         <span class="mlabel">Throughput</span><span class="miniVal" id="mThroughput">–</span>
       </div>
       <div class="card mini" id="mQueueWrap"
@@ -2167,20 +2167,6 @@ function bindUI() {
   // and a brief highlight of the value pill while scrubbing.
   document.querySelectorAll('input[type=range]').forEach(r => {
     r.addEventListener('input', () => { paintRange(r); flashVal(r); });
-  });
-
-  // Collapsible floating panels: clicking (or Enter/Space on) a panel head
-  // toggles its body so it stops obscuring the road.
-  document.querySelectorAll('.panelHead[data-toggle]').forEach(head => {
-    const panel = head.closest('.panel');
-    const toggle = () => {
-      const collapsed = panel.classList.toggle('collapsed');
-      head.setAttribute('aria-expanded', String(!collapsed));
-    };
-    head.addEventListener('click', toggle);
-    head.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
-    });
   });
 
   updatePauseUI();
