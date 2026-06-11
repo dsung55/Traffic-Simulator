@@ -6,190 +6,391 @@
 <title>Traffic Simulator — NaSch Cellular Automaton</title>
 <style>
   :root{
-    --bg:#1e1f24; --panel:#26272d; --panel2:#2d2e35; --border:#3a3b44;
-    --text:#e6e6ea; --dim:#9a9ba6; --accent:#4da3ff;
-    --good:#39c46a; --warn:#e6c54a; --bad:#e85149;
+    --bg:#0c0e13; --bg-glow:rgba(64,118,255,.07);
+    --panel:#14171f; --panel-2:#1a1e29; --panel-3:#222736;
+    --border:#252b39; --border-2:#313849;
+    --text:#e9ebf2; --dim:#969cad; --faint:#697084;
+    --accent:#58a6ff; --accent-2:#3ddad0; --accent-soft:rgba(88,166,255,.14);
+    --accent-grad:linear-gradient(90deg,#58a6ff,#3ddad0);
+    --good:#3ecf6e; --warn:#f0c24b; --bad:#f0544a;
+    --track:#272d3d;
+    --r-sm:8px; --r-md:12px; --r-lg:16px;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 12px 32px -18px rgba(0,0,0,.65);
+    --ring:0 0 0 3px rgba(88,166,255,.35);
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
-    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-  #app{display:grid;grid-template-columns:1fr 280px;grid-template-rows:auto 1fr;
-    height:100%;gap:10px;padding:10px}
-  #canvasWrap{grid-column:1;grid-row:1;background:var(--panel);border:1px solid var(--border);
-    border-radius:10px;padding:8px;min-width:0}
-  #canvas{display:block;width:100%;height:300px;border-radius:6px}
-  #controls{grid-column:1;grid-row:2;background:var(--panel);border:1px solid var(--border);
-    border-radius:10px;padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px 22px;
-    align-content:flex-start;overflow:auto}
-  #sidebar{grid-column:2;grid-row:1 / span 2;background:var(--panel);border:1px solid var(--border);
-    border-radius:10px;padding:14px;overflow:auto}
-  h1{font-size:15px;margin:0 0 4px;font-weight:600;letter-spacing:.3px}
-  h2{font-size:13px;margin:0 0 10px;color:var(--dim);text-transform:uppercase;letter-spacing:1px}
-  .ctl{display:flex;flex-direction:column;gap:4px;min-width:130px}
-  .ctl.row{flex-direction:row;align-items:center;gap:8px;min-width:0}
-  .ctl label{font-size:12px;color:var(--dim);white-space:nowrap}
-  .ctl .val{color:var(--accent);font-variant-numeric:tabular-nums}
-  .ctl.disabled{opacity:.32;pointer-events:none}
-  select,button{background:var(--panel2);color:var(--text);border:1px solid var(--border);
-    border-radius:6px;padding:5px 9px;font:inherit;cursor:pointer}
-  button:hover,select:hover{border-color:var(--accent)}
-  button.primary{background:var(--accent);border-color:var(--accent);color:#10131a;font-weight:600}
-  input[type=range]{width:150px;accent-color:var(--accent);cursor:pointer}
-  input[type=checkbox]{accent-color:var(--accent);width:16px;height:16px;cursor:pointer}
-  .metric{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
-    padding:7px 9px;margin-bottom:6px;background:var(--panel2);border-radius:7px;cursor:help}
-  .metric .mlabel{font-size:12px;color:var(--dim)}
-  .metric .mval{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
-  .metric.sub{background:none;padding:2px 9px 2px 20px;margin-bottom:2px}
-  .metric.sub .mval{font-weight:400;font-size:12px}
-  .dotA,.dotN,.dotP{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
-  .dotA{background:#ff6a5e}.dotN{background:#c9c9d2}.dotP{background:#6ea8e8}
-  #gaugeWrap{height:10px;background:#191a1f;border-radius:5px;overflow:hidden;margin-top:6px}
-  #gaugeBar{height:100%;width:0%;background:var(--good);transition:width .4s,background .4s}
-  #spark{width:100%;height:48px;background:#191a1f;border-radius:7px;margin-top:4px}
-  .sectionGap{height:12px}
-  #scenarioDesc{font-size:11px;color:var(--dim);max-width:320px}
+  html{height:100%}
+  body{margin:0;min-height:100%;color:var(--text);
+    background:var(--bg)
+      radial-gradient(900px 420px at 18% -8%, var(--bg-glow), transparent 65%) no-repeat fixed;
+    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  ::selection{background:rgba(88,166,255,.35)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+  /* ── Layout ─────────────────────────────────────────────── */
+  #app{display:grid;grid-template-columns:minmax(0,1fr) 304px;grid-template-rows:auto auto auto;
+    gap:14px;padding:16px 18px 22px;max-width:1320px;margin:0 auto}
+  #topbar{grid-column:1 / -1}
+  #canvasWrap{grid-column:1;grid-row:2}
+  #controls{grid-column:1;grid-row:3}
+  #sidebar{grid-column:2;grid-row:2 / span 2}
+
+  /* ── Header ─────────────────────────────────────────────── */
+  #topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{flex:none;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;
+    background:var(--accent-grad);color:#0a1018;
+    box-shadow:0 2px 10px -2px rgba(88,166,255,.55)}
+  h1{font-size:17px;margin:0;font-weight:650;letter-spacing:.2px;line-height:1.2}
+  .brandSub{font-size:11.5px;color:var(--faint);letter-spacing:.3px}
+  .topActions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+  .chip{display:inline-flex;align-items:center;gap:8px;padding:6px 13px;border-radius:999px;
+    background:var(--panel-2);border:1px solid var(--border);font-size:12px;color:var(--dim);
+    transition:border-color .25s}
+  .chipDot{width:7px;height:7px;border-radius:50%;background:var(--good);
+    box-shadow:0 0 8px var(--good);animation:pulse 2.2s ease-in-out infinite}
+  .chip.paused .chipDot{background:var(--warn);box-shadow:0 0 8px var(--warn);animation:none}
+  .chip #statusState{color:var(--text);font-weight:600}
+  .chipSep{color:var(--faint)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ── Buttons ────────────────────────────────────────────── */
+  .btn{display:inline-flex;align-items:center;gap:7px;padding:7px 15px;border-radius:9px;
+    background:var(--panel-3);color:var(--text);border:1px solid var(--border-2);
+    font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+    transition:background .15s,border-color .15s,transform .1s,box-shadow .2s,filter .15s}
+  .btn:hover{border-color:var(--accent);background:#283045}
+  .btn:active{transform:translateY(1px)}
+  .btn svg{flex:none}
+  .btn.primary{background:var(--accent-grad);border-color:transparent;color:#0a1018;
+    box-shadow:0 2px 12px -3px rgba(88,166,255,.5);min-width:104px;justify-content:center}
+  .btn.primary:hover{filter:brightness(1.1)}
+  .btn.primary.paused{background:linear-gradient(90deg,#3ecf6e,#37dca6);
+    box-shadow:0 2px 12px -3px rgba(62,207,110,.5)}
+
+  /* ── Canvas card ────────────────────────────────────────── */
+  #canvasWrap{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-lg);
+    padding:8px;min-width:0;box-shadow:var(--shadow)}
+  #canvas{display:block;width:100%;height:380px;border-radius:10px}
+
+  /* ── Controls ───────────────────────────────────────────── */
+  #controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(212px,1fr));gap:12px;
+    align-items:stretch;min-width:0}
+  .group{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-md);
+    padding:13px 15px 15px;display:flex;flex-direction:column;gap:13px;box-shadow:var(--shadow)}
+  .group>h3{margin:0;font-size:10.5px;font-weight:700;color:var(--faint);
+    text-transform:uppercase;letter-spacing:1.4px}
+  .hint{margin:-4px 0 0;font-size:11px;color:var(--faint)}
+  #scenarioDesc{margin:0;font-size:11.5px;line-height:1.5;color:var(--dim)}
+
+  .ctl{display:flex;flex-direction:column;gap:7px;min-width:0}
+  .ctl>label{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--dim);
+    white-space:nowrap;min-width:0}
+  .ctl.disabled{opacity:.35;filter:saturate(.3);pointer-events:none}
+  .ctl.disabled,.ctl.disabled *{cursor:not-allowed}
+  .group:has(.ctl.disabled):not(:has(.ctl:not(.disabled)))>h3{opacity:.45}
+
+  .val{display:inline-block;margin-left:auto;padding:1px 9px;border-radius:999px;
+    background:var(--accent-soft);color:#8ec3ff;font-size:11px;font-weight:600;
+    font-variant-numeric:tabular-nums;letter-spacing:.2px;
+    transition:background .25s,color .25s}
+  .val:empty{display:none}
+  @keyframes bump{0%{transform:scale(1.16);background:rgba(88,166,255,.4);color:#fff}
+    100%{transform:scale(1)}}
+  .val.bump{animation:bump .35s ease}
+
+  /* Selects */
+  select{width:100%;appearance:none;-webkit-appearance:none;
+    background:var(--panel-3) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23969cad' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+      no-repeat right 11px center;
+    color:var(--text);border:1px solid var(--border-2);border-radius:9px;
+    padding:7px 30px 7px 11px;font:inherit;font-size:13px;cursor:pointer;
+    transition:border-color .15s,background-color .15s}
+  select:hover{border-color:var(--accent)}
+  select:focus-visible{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+
+  /* Range sliders */
+  input[type=range]{appearance:none;-webkit-appearance:none;width:100%;height:20px;margin:0;
+    background:transparent;cursor:pointer}
+  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:999px;
+    background:linear-gradient(90deg,var(--accent) 0%,var(--accent-2) var(--p,0%),
+      var(--track) var(--p,0%),var(--track) 100%)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+    width:16px;height:16px;margin-top:-5px;border-radius:50%;border:none;background:#f4f7ff;
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.25);
+    transition:transform .15s,box-shadow .2s}
+  input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.18)}
+  input[type=range]:active::-webkit-slider-thumb{transform:scale(1.32);
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 6px rgba(88,166,255,.22)}
+  input[type=range]:focus-visible{outline:none}
+  input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 1px 4px rgba(0,0,0,.55),var(--ring)}
+  input[type=range]::-moz-range-track{height:6px;border-radius:999px;background:var(--track)}
+  input[type=range]::-moz-range-progress{height:6px;border-radius:999px;background:var(--accent-grad)}
+  input[type=range]::-moz-range-thumb{width:16px;height:16px;border:none;border-radius:50%;
+    background:#f4f7ff;box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.25);
+    transition:transform .15s,box-shadow .2s}
+  input[type=range]:hover::-moz-range-thumb{transform:scale(1.18)}
+  input[type=range]:active::-moz-range-thumb{transform:scale(1.32);
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 6px rgba(88,166,255,.22)}
+  input[type=range]:focus-visible::-moz-range-thumb{box-shadow:0 1px 4px rgba(0,0,0,.55),var(--ring)}
+
+  /* Toggle switches (real checkbox stays for a11y) */
+  .toggle{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text);
+    cursor:pointer;position:relative;white-space:nowrap;min-width:0}
+  .toggle input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+  .tg{flex:none;width:36px;height:20px;border-radius:999px;background:var(--track);
+    border:1px solid var(--border-2);position:relative;
+    transition:background .2s,border-color .2s}
+  .tg::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;
+    border-radius:50%;background:#aab2c5;box-shadow:0 1px 3px rgba(0,0,0,.4);
+    transition:transform .2s cubic-bezier(.22,1.2,.36,1),background .2s}
+  .toggle:hover .tg{border-color:var(--accent)}
+  .toggle input:checked+.tg{background:var(--accent);border-color:var(--accent)}
+  .toggle input:checked+.tg::after{transform:translateX(16px);background:#fff}
+  .toggle input:focus-visible+.tg{box-shadow:var(--ring)}
+
+  /* ── Sidebar / metrics ──────────────────────────────────── */
+  #sidebar{background:var(--panel);border:1px solid var(--border);border-radius:var(--r-lg);
+    padding:15px;display:flex;flex-direction:column;gap:10px;min-width:0;
+    box-shadow:var(--shadow);align-self:start}
+  h2{margin:0 0 2px;font-size:10.5px;font-weight:700;color:var(--faint);
+    text-transform:uppercase;letter-spacing:1.4px}
+  .card{background:var(--panel-2);border:1px solid var(--border);border-radius:var(--r-sm);
+    padding:10px 12px;min-width:0}
+  .card[title]{cursor:help}
+  .mlabel{font-size:10.5px;font-weight:600;color:var(--dim);
+    text-transform:uppercase;letter-spacing:.9px}
+
+  .card.hero{background:linear-gradient(180deg,var(--panel-3),var(--panel-2));
+    border-color:var(--border-2);padding:12px 14px 13px}
+  .heroTop{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  .heroVal{font-size:30px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;
+    transition:color .5s}
+  .heroUnit{font-size:11.5px;font-weight:500;color:var(--faint);margin-left:3px}
+  #gaugeWrap{position:relative;height:12px;margin-top:11px;border-radius:999px;
+    background:#0e1118;border:1px solid var(--border);overflow:hidden}
+  #gaugeBar{height:100%;width:0%;border-radius:999px;background:var(--good);
+    transition:width .6s cubic-bezier(.22,1,.36,1),background .6s}
+  #gaugeWrap::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(90deg,transparent 0,transparent calc(25% - 1px),
+      rgba(255,255,255,.13) calc(25% - 1px),rgba(255,255,255,.13) 25%)}
+  .gaugeScale{display:flex;justify-content:space-between;margin-top:6px;
+    font-size:9.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.7px}
+
+  .bigVal{display:block;margin-top:3px;font-size:23px;font-weight:700;line-height:1.15;
+    font-variant-numeric:tabular-nums}
+  .legend{display:flex;flex-direction:column;gap:4px;margin-top:9px;padding-top:9px;
+    border-top:1px dashed var(--border-2)}
+  .legend>span{display:flex;align-items:center;font-size:11.5px;color:var(--dim);cursor:help}
+  .legend b{margin-left:auto;font-weight:600;color:var(--text);
+    font-variant-numeric:tabular-nums;font-size:11.5px}
+  .dotA,.dotN,.dotP{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;
+    margin-right:7px}
+  .dotA{background:#ff6a5e;box-shadow:0 0 6px rgba(255,106,94,.6)}
+  .dotN{background:#c9c9d2}
+  .dotP{background:#6ea8e8;box-shadow:0 0 6px rgba(110,168,232,.5)}
+
+  .miniGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .card.mini{display:flex;flex-direction:column;gap:4px;padding:9px 11px}
+  .miniVal{font-size:14.5px;font-weight:650;font-variant-numeric:tabular-nums;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .sparkCard{display:flex;flex-direction:column;gap:8px}
+  #spark{display:block;width:100%;height:60px;border-radius:6px;background:#0e1118}
+
+  /* ── Responsive / motion ────────────────────────────────── */
+  @media (max-width:980px){
+    #app{grid-template-columns:1fr;padding:12px}
+    #topbar,#canvasWrap,#controls,#sidebar{grid-column:1}
+    #canvasWrap{grid-row:auto}
+    #controls{grid-row:auto}
+    #sidebar{grid-row:auto}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{transition-duration:.01ms!important;
+      animation-duration:.01ms!important;animation-iteration-count:1!important}
+  }
 </style>
 </head>
 <body>
 <div id="app">
+
+  <header id="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor"
+             stroke-width="2.1" stroke-linecap="round">
+          <path d="M6.6 2.5 4 17.5"/>
+          <path d="M13.4 2.5 16 17.5"/>
+          <path d="M10 3.4v2.4M10 8.8v2.4M10 14.2v2.4"/>
+        </svg>
+      </span>
+      <div>
+        <h1>Traffic Simulator</h1>
+        <div class="brandSub">Nagel–Schreckenberg cellular automaton</div>
+      </div>
+    </div>
+    <div class="topActions">
+      <span class="chip" id="statusChip" title="Active scenario and simulation state">
+        <span class="chipDot"></span>
+        <span id="statusScenario"></span>
+        <span class="chipSep">·</span>
+        <span id="statusState">Live</span>
+      </span>
+      <button id="btnPause" class="btn primary" aria-pressed="false"></button>
+      <button id="btnReset" class="btn">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+             stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
+          <path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.76"/>
+          <path d="M12.2 1.6v3h-3" stroke-linejoin="round"/>
+        </svg>
+        <span>Reset</span>
+      </button>
+    </div>
+  </header>
 
   <div id="canvasWrap">
     <canvas id="canvas"></canvas>
   </div>
 
   <div id="controls">
-    <div class="ctl">
-      <h1>Traffic Simulator</h1>
-      <div class="ctl row">
-        <button id="btnPause" class="primary">⏸ Pause</button>
-        <button id="btnReset">↺ Reset</button>
+
+    <section class="group">
+      <h3>Scenario</h3>
+      <div class="ctl" id="cScenario">
+        <label for="scenario">Road layout</label>
+        <select id="scenario">
+          <option value="highway">Highway with On-Ramp</option>
+          <option value="interchange">Highway Interchange</option>
+          <option value="city">City Arterial (Lights)</option>
+        </select>
+        <p id="scenarioDesc"></p>
       </div>
-    </div>
+    </section>
 
-    <div class="ctl" id="cScenario">
-      <label>Scenario</label>
-      <select id="scenario">
-        <option value="highway">Highway with On-Ramp</option>
-        <option value="interchange">Highway Interchange</option>
-        <option value="city">City Arterial (Lights)</option>
-      </select>
-      <div id="scenarioDesc"></div>
-    </div>
+    <section class="group">
+      <h3>Traffic</h3>
+      <div class="ctl" id="cCars">
+        <label for="cars">Number of cars <span class="val" id="carsVal"></span></label>
+        <input type="range" id="cars" min="0" max="200" value="60">
+      </div>
+      <div class="ctl" id="cSpeed">
+        <label for="speed">Speed limit <span class="val" id="speedVal"></span></label>
+        <input type="range" id="speed" min="35" max="75" step="5" value="65">
+      </div>
+      <div class="ctl" id="cTrucks">
+        <label for="trucks">Trucks <span class="val" id="trucksVal"></span></label>
+        <input type="range" id="trucks" min="0" max="30" value="10">
+      </div>
+      <div class="ctl" id="cLanes">
+        <label for="lanes">Lanes</label>
+        <select id="lanes"></select>
+      </div>
+    </section>
 
-    <div class="ctl" id="cCars">
-      <label>Number of cars <span class="val" id="carsVal"></span></label>
-      <input type="range" id="cars" min="0" max="200" value="60">
-    </div>
+    <section class="group">
+      <h3>Drivers</h3>
+      <div class="ctl" id="cAgg">
+        <label for="pctAgg"><i class="dotA"></i>Aggressive <span class="val" id="aggVal"></span></label>
+        <input type="range" id="pctAgg" min="0" max="50" value="15">
+      </div>
+      <div class="ctl" id="cPas">
+        <label for="pctPas"><i class="dotP"></i>Passive <span class="val" id="pasVal"></span></label>
+        <input type="range" id="pctPas" min="0" max="50" value="15">
+      </div>
+      <p class="hint">Everyone else drives normally.</p>
+    </section>
 
-    <div class="ctl" id="cSpeed">
-      <label>Speed limit <span class="val" id="speedVal"></span></label>
-      <input type="range" id="speed" min="35" max="75" step="5" value="65">
-    </div>
+    <section class="group">
+      <h3>Road</h3>
+      <div class="ctl" id="cMerge">
+        <label for="mergeShape">Merging lane shape</label>
+        <select id="mergeShape">
+          <option value="taper">Standard taper (10 cells)</option>
+          <option value="zipper">Zipper (15 cells)</option>
+          <option value="parallel">Parallel (25 cells)</option>
+        </select>
+      </div>
+      <div class="ctl" id="cMeter">
+        <label class="toggle"><input type="checkbox" id="meterOn"><span class="tg"></span>Ramp meter</label>
+        <label for="meterRate">Release: 1 car / <span class="val" id="meterRateVal"></span></label>
+        <input type="range" id="meterRate" min="4" max="30" value="8">
+      </div>
+      <div class="ctl" id="cIncident">
+        <label class="toggle"><input type="checkbox" id="incident"><span class="tg"></span>Incident (lane closure)</label>
+      </div>
+    </section>
 
-    <div class="ctl" id="cLanes">
-      <label>Lanes</label>
-      <select id="lanes"></select>
-    </div>
+    <section class="group">
+      <h3>Signals</h3>
+      <div class="ctl" id="cCycle">
+        <label for="cycleLen">Light cycle <span class="val" id="cycleVal"></span></label>
+        <input type="range" id="cycleLen" min="30" max="90" value="60">
+      </div>
+      <div class="ctl" id="cWave">
+        <label class="toggle"><input type="checkbox" id="greenWave"><span class="tg"></span>Green wave (synced lights)</label>
+      </div>
+    </section>
 
-    <div class="ctl" id="cTrucks">
-      <label>% Trucks <span class="val" id="trucksVal"></span></label>
-      <input type="range" id="trucks" min="0" max="30" value="10">
-    </div>
-
-    <div class="ctl" id="cAgg">
-      <label>% Aggressive drivers <span class="val" id="aggVal"></span></label>
-      <input type="range" id="pctAgg" min="0" max="50" value="15">
-    </div>
-
-    <div class="ctl" id="cPas">
-      <label>% Passive drivers <span class="val" id="pasVal"></span></label>
-      <input type="range" id="pctPas" min="0" max="50" value="15">
-    </div>
-
-    <div class="ctl" id="cMeter">
-      <label class="ctl row" style="min-width:0"><input type="checkbox" id="meterOn"> Ramp meter</label>
-      <label>Release: 1 car / <span class="val" id="meterRateVal"></span></label>
-      <input type="range" id="meterRate" min="4" max="30" value="8">
-    </div>
-
-    <div class="ctl" id="cMerge">
-      <label>Merging lane shape</label>
-      <select id="mergeShape">
-        <option value="taper">Standard taper (10 cells)</option>
-        <option value="zipper">Zipper (15 cells)</option>
-        <option value="parallel">Parallel (25 cells)</option>
-      </select>
-    </div>
-
-    <div class="ctl" id="cIncident">
-      <label class="ctl row" style="min-width:0"><input type="checkbox" id="incident"> Incident (lane closure)</label>
-    </div>
-
-    <div class="ctl" id="cCycle">
-      <label>Light cycle <span class="val" id="cycleVal"></span></label>
-      <input type="range" id="cycleLen" min="30" max="90" value="60">
-    </div>
-
-    <div class="ctl" id="cWave">
-      <label class="ctl row" style="min-width:0"><input type="checkbox" id="greenWave"> Green wave (synced lights)</label>
-    </div>
-
-    <div class="ctl" id="cWeather">
-      <label>Weather</label>
-      <select id="weather">
-        <option value="clear">Clear</option>
-        <option value="rain">Rain</option>
-        <option value="fog">Fog</option>
-      </select>
-    </div>
+    <section class="group">
+      <h3>Environment</h3>
+      <div class="ctl" id="cWeather">
+        <label for="weather">Weather</label>
+        <select id="weather">
+          <option value="clear">Clear</option>
+          <option value="rain">Rain</option>
+          <option value="fog">Fog</option>
+        </select>
+      </div>
+    </section>
   </div>
 
   <aside id="sidebar">
     <h2>Live Metrics</h2>
 
-    <div class="metric" title="Mean speed of all vehicles, converted from cells/tick to mph (1 cell/tick ≈ 16.8 mph).">
-      <span class="mlabel">Avg speed</span><span class="mval" id="mSpeed">–</span>
-    </div>
-    <div class="metric sub" title="Average speed of aggressive-profile drivers.">
-      <span class="mlabel"><i class="dotA"></i>Aggressive</span><span class="mval" id="mSpeedA">–</span>
-    </div>
-    <div class="metric sub" title="Average speed of normal-profile drivers.">
-      <span class="mlabel"><i class="dotN"></i>Normal</span><span class="mval" id="mSpeedN">–</span>
-    </div>
-    <div class="metric sub" title="Average speed of passive-profile drivers.">
-      <span class="mlabel"><i class="dotP"></i>Passive</span><span class="mval" id="mSpeedP">–</span>
-    </div>
-
-    <div class="metric" title="Vehicles per mile of road per lane (road is 200 cells × 7.5 m ≈ 0.93 mi).">
-      <span class="mlabel">Density</span><span class="mval" id="mDensity">–</span>
-    </div>
-
-    <div class="metric" title="Vehicles passing the sensor at cell 150, counted over the last 60 simulated seconds.">
-      <span class="mlabel">Throughput</span><span class="mval" id="mThroughput">–</span>
-    </div>
-
-    <div class="metric" style="flex-direction:column;align-items:stretch"
+    <div class="card hero"
          title="Congestion score: 100 × (1 − avg speed / speed limit). 0 = free flow, 100 = standstill.">
-      <span style="display:flex;justify-content:space-between">
-        <span class="mlabel">Traffic rating</span><span class="mval" id="mRating">–</span>
-      </span>
+      <div class="heroTop">
+        <span class="mlabel">Traffic rating</span>
+        <span class="heroVal"><span id="mRating">–</span><span class="heroUnit">/ 100</span></span>
+      </div>
       <div id="gaugeWrap"><div id="gaugeBar"></div></div>
+      <div class="gaugeScale"><span>Free flow</span><span>Standstill</span></div>
     </div>
 
-    <div class="metric" id="mQueueWrap"
-         title="Highway: vehicles waiting at the on-ramp (meter queue + acceleration lane). City: average stop events per vehicle in the last light cycle.">
-      <span class="mlabel" id="mQueueLabel">Ramp queue</span><span class="mval" id="mQueue">–</span>
+    <div class="card" title="Mean speed of all vehicles, converted from cells/tick to mph (1 cell/tick ≈ 16.8 mph).">
+      <span class="mlabel">Avg speed</span>
+      <span class="bigVal" id="mSpeed">–</span>
+      <div class="legend">
+        <span title="Average speed of aggressive-profile drivers."><i class="dotA"></i>Aggressive <b id="mSpeedA">–</b></span>
+        <span title="Average speed of normal-profile drivers."><i class="dotN"></i>Normal <b id="mSpeedN">–</b></span>
+        <span title="Average speed of passive-profile drivers."><i class="dotP"></i>Passive <b id="mSpeedP">–</b></span>
+      </div>
     </div>
 
-    <div class="metric" title="Lane-change maneuvers in the last 60 simulated seconds — a proxy for aggressive-driver churn.">
-      <span class="mlabel">Lane changes / min</span><span class="mval" id="mLaneCh">–</span>
+    <div class="miniGrid">
+      <div class="card mini" title="Vehicles per mile of road per lane (road is 200 cells × 7.5 m ≈ 0.93 mi).">
+        <span class="mlabel">Density</span><span class="miniVal" id="mDensity">–</span>
+      </div>
+      <div class="card mini" title="Vehicles passing the sensor at cell 150, counted over the last 60 simulated seconds.">
+        <span class="mlabel">Throughput</span><span class="miniVal" id="mThroughput">–</span>
+      </div>
+      <div class="card mini" id="mQueueWrap"
+           title="Highway: vehicles waiting at the on-ramp (meter queue + acceleration lane). City: average stop events per vehicle in the last light cycle.">
+        <span class="mlabel" id="mQueueLabel">Ramp queue</span><span class="miniVal" id="mQueue">–</span>
+      </div>
+      <div class="card mini" title="Lane-change maneuvers in the last 60 simulated seconds — a proxy for aggressive-driver churn.">
+        <span class="mlabel">Lane changes</span><span class="miniVal" id="mLaneCh">–</span>
+      </div>
     </div>
 
-    <div class="sectionGap"></div>
-    <h2>Avg speed — last 60 s</h2>
-    <canvas id="spark" width="248" height="48"
-      title="Sparkline of average speed (mph) sampled every 0.5 s over the last 60 simulated seconds."></canvas>
+    <div class="card sparkCard">
+      <span class="mlabel">Avg speed — last 60 s</span>
+      <canvas id="spark" width="248" height="60"
+        title="Sparkline of average speed (mph) sampled every 0.5 s over the last 60 simulated seconds."></canvas>
+    </div>
   </aside>
 </div>
 
@@ -293,12 +494,39 @@ function rampEnd() { return cfg().onRampCell + rampLen() - 1; } // last usable a
 function densityCap() { return Math.floor(sim.lanes * N * 0.4); }
 function effTarget() { return Math.min(sim.targetCars, densityCap()); }
 
-// Speed limit in cells/tick, reduced by 1 in rain/fog (min 1).
-function vmaxEff() {
-  let v = Math.max(1, Math.round(sim.speedMph / MPH_PER_CELL));
-  if (sim.weather !== 'clear') v = Math.max(1, v - 1);
-  return v;
+/*
+ * Fractional speed-limit model.
+ * Posted limits rarely land on an integer number of cells/tick
+ * (65 mph = 3.87 cells/tick), and the old Math.round() mapping collapsed
+ * several slider steps onto the same integer vmax (55→3, 60/65/70/75→4),
+ * so most speed-slider movements had literally no effect. Instead:
+ *   - vmaxFloat() returns the real-valued limit in cells/tick; weather
+ *     subtracts a fractional amount (rain ≈ −8 mph, fog ≈ −17 mph).
+ *   - Each car carries a stable personal speedFactor (aggressive drivers run
+ *     a few mph over the limit, passive a few under, normal ≈ at it).
+ *   - Per tick a car's fractional top speed vf is realized probabilistically:
+ *     floor(vf), plus one extra cell with probability frac(vf). The
+ *     time-averaged top speed therefore equals vf exactly, so the reported
+ *     avg mph (v × 16.8) responds monotonically to every 5 mph slider step.
+ */
+function vmaxFloat() {
+  let v = sim.speedMph / MPH_PER_CELL;
+  if (sim.weather === 'rain') v -= 0.5;       // ≈ 8 mph slower in rain
+  else if (sim.weather === 'fog') v -= 1.0;   // ≈ 17 mph slower in fog
+  return Math.max(1, v);
 }
+// Integer convenience (rounded) — used for scan bounds, spawn seeds and the
+// green-wave timing, never for a car's per-tick top speed.
+function vmaxEff() { return Math.max(1, Math.round(vmaxFloat())); }
+// Realize a fractional speed as an integer cells/tick value for this tick.
+function ditherV(vf) { const f = Math.floor(vf); return f + (Math.random() < vf - f ? 1 : 0); }
+// Stable per-car desired-speed multiplier, drawn once per profile assignment.
+function rollSpeedFactor(profName) {
+  if (profName === 'aggressive') return 1.04 + Math.random() * 0.08; // ~3–8 mph over the limit
+  if (profName === 'passive')    return 0.90 + Math.random() * 0.06; // ~3–7 mph under
+  return 0.97 + Math.random() * 0.06;                                // ≈ at the limit
+}
+const TRUCK_VMAX = 3.0; // trucks governed at 3 cells/tick ≈ 50 mph regardless of limit
 // Randomization probability for a profile, +0.05 in rain/fog.
 function pEff(prof) { return prof.p + (sim.weather !== 'clear' ? 0.05 : 0); }
 
@@ -314,7 +542,7 @@ function lightPhases() {
 function lightOffset(i) {
   if (!sim.greenWave) return 0;
   const cells = cfg().lightCells[i] - cfg().lightCells[0];
-  return Math.round(cells / vmaxEff()) % sim.cycleLen;
+  return Math.round(cells / vmaxFloat()) % sim.cycleLen;
 }
 function lightState(i) {
   const ph = lightPhases();
@@ -338,7 +566,8 @@ function carColor(profName, isTruck) {
   if (profName === 'passive')    return `hsl(${h(205, 230)},${h(32, 50)}%,${h(55, 68)}%)`;
   return `hsl(${h(0, 360)},${h(8, 22)}%,${h(55, 80)}%)`;
 }
-// Create a car. Profile and truck status are permanent for its lifetime.
+// Create a car. Profile and truck status persist until the % sliders change,
+// at which point retuneFleet() may reassign them to match the new mix.
 function makeCar(lane, cell, v) {
   const isTruck = Math.random() * 100 < sim.pctTrucks;
   const profName = rollProfile(isTruck);
@@ -349,6 +578,7 @@ function makeCar(lane, cell, v) {
     id: sim.nextId++, lane, cell, v,
     prevCell: cell, prevLane: lane,
     profName, prof: PROFILES[profName], isTruck,
+    speedFactor: rollSpeedFactor(profName),
     exitChance, exiting: Math.random() < exitChance,
     cool: 0, age: 0, braking: false,
     color: carColor(profName, isTruck),
@@ -361,6 +591,10 @@ function buildGrid() {
   sim.grid = [];
   for (let l = 0; l < rows; l++) sim.grid.push(new Int16Array(N).fill(-1));
   if (sim.incident && cfg().hasIncident) sim.grid[sim.lanes - 1][INCIDENT_CELL] = -2;
+  // Cars are written after the incident marker on purpose: if the incident is
+  // toggled on while a car occupies INCIDENT_CELL, the car (an obstacle too)
+  // takes precedence, drives off normally, and the -2 marker reappears on the
+  // next rebuild — the grid is rebuilt every tick, so toggling is immediate.
   sim.cars.forEach((c, i) => { sim.grid[c.lane][c.cell] = i; });
 }
 function cellFree(lane, cell) { return sim.grid[lane][cell] === -1; }
@@ -384,7 +618,8 @@ function gapBehind(lane, cell, maxScan) {
 // end-of-ramp wall. Lights block ALL lanes at their cell; a yellow light only
 // blocks cars that are still outside stopping distance (d > v ⇒ must stop).
 function effGap(lane, cell, v) {
-  const scan = vmaxEff() + 6;
+  // Scan far enough to cover the fastest possible car (aggressive factor ≤ 1.12).
+  const scan = Math.ceil(vmaxFloat() * 1.15) + 6;
   let g = gapAhead(lane, cell, scan);
   const lights = cfg().lightCells;
   if (lights) {
@@ -473,14 +708,19 @@ function laneChangeStep() {
 // Parallel update: all speeds computed against pre-move positions, then all
 // cars advance, so v ≤ gap guarantees no collisions.
 function speedAndMoveStep() {
-  const vm = vmaxEff();
+  const vmf = vmaxFloat();
   const newV = new Array(sim.cars.length);
 
   for (let i = 0; i < sim.cars.length; i++) {
     const car = sim.cars[i];
     const prof = car.prof;
     car.age++;
-    const vmaxCar = car.isTruck ? Math.min(vm, 3) : vm; // trucks capped ≈55 mph
+    // Per-car fractional top speed: limit × personal factor, trucks governed
+    // at TRUCK_VMAX (≈50 mph). Dithered to an integer for this tick so the
+    // time-averaged top speed equals the fractional target (see vmaxFloat()).
+    let vf = vmf * car.speedFactor;
+    if (car.isTruck) vf = Math.min(vf, TRUCK_VMAX);
+    const vmaxCar = ditherV(Math.max(1, vf));
     const accelEvery = Math.max(prof.accelEvery, car.isTruck ? 2 : 1);
 
     // 1. Accelerate (passive drivers & trucks only every other tick)
@@ -548,9 +788,12 @@ function spawnStep() {
   const pop = sim.cars.length;
 
   if (cfg().hasRamp) {
-    // Highway: the on-ramp is the only entry. Demand accumulates in the queue.
+    // Highway: small deficits flow in realistically through the on-ramp.
     if (pop + sim.rampQueue < target) sim.rampQueue++;
-    else if (pop + sim.rampQueue > target && sim.rampQueue > 0) sim.rampQueue--;
+    else if (pop + sim.rampQueue > target) {
+      // Slider dropped: drain the waiting (off-road) queue immediately.
+      sim.rampQueue = Math.max(0, target - pop);
+    }
 
     const entry = rampStart();
     const entryFree = cellFree(rampLaneIdx(), entry);
@@ -564,7 +807,7 @@ function spawnStep() {
       releaseRampCar(entry); // free merging: one per tick as space allows
     }
   } else {
-    // City: cars enter at the left edge when below target.
+    // City: small deficits enter at the left edge, one car per tick.
     if (pop < target) {
       const lanes = [...Array(sim.lanes).keys()];
       for (const l of lanes.sort(() => Math.random() - 0.5)) {
@@ -577,12 +820,124 @@ function spawnStep() {
       }
     }
   }
+  convergePopulation(target);
+}
+
+// Fast convergence to the "Number of cars" slider. The ramp / left-edge
+// trickle adds at most 1 car/tick and the wrap-point despawn removes only
+// cars that happen to cross the seam, so a big slider move used to take
+// minutes to show. When the population is more than a couple of cars off
+// target we close ~1/3 of the gap per tick (geometric convergence: a full
+// 0↔200 jump settles within ~10 simulated seconds):
+//   - below target: spawn into sparse mainline stretches (free cell with
+//     clear space ahead and behind, entry speed capped by the gap ahead so
+//     the insertion is collision-safe and doesn't shock followers);
+//   - above target: despawn randomly chosen cars, preferring those near the
+//     wrap seam where a disappearance is least visible.
+function convergePopulation(target) {
+  const queued = cfg().hasRamp ? sim.rampQueue : 0;
+  const deficit = target - sim.cars.length - queued;
+
+  if (deficit > 2) {
+    let toSpawn = Math.ceil(deficit / 3);
+    let attempts = toSpawn * 10;
+    while (toSpawn > 0 && attempts-- > 0) {
+      const lane = Math.floor(Math.random() * sim.lanes);
+      const cell = Math.floor(Math.random() * N);
+      if (!cellFree(lane, cell)) continue;
+      const ahead = gapAhead(lane, cell, 8);
+      if (ahead < 1 || gapBehind(lane, cell, 3) < 2) continue; // sparse stretches only
+      const car = makeCar(lane, cell, Math.max(1, Math.min(vmaxEff(), ahead)));
+      sim.cars.push(car);
+      sim.grid[lane][cell] = sim.cars.length - 1;
+      toSpawn--;
+    }
+  } else if (sim.cars.length - target > 2) {
+    let toRemove = Math.ceil((sim.cars.length - target) / 3);
+    const seam = [], rest = [];
+    sim.cars.forEach((c, i) => (c.cell >= N - 20 || c.cell < 5 ? seam : rest).push(i));
+    const doomed = new Set();
+    for (const pool of [seam, rest]) {
+      while (toRemove > 0 && pool.length) {
+        doomed.add(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+        toRemove--;
+      }
+    }
+    if (doomed.size) {
+      sim.cars = sim.cars.filter((_, i) => !doomed.has(i));
+      buildGrid(); // indices shifted
+    }
+  }
 }
 function releaseRampCar(entry) {
   const car = makeCar(rampLaneIdx(), entry, 1); // re-rolls profile & exit chance
   sim.cars.push(car);
   sim.grid[rampLaneIdx()][entry] = sim.cars.length - 1;
   sim.rampQueue--;
+}
+
+//──────────────────────────── Fleet composition ────────────────────────────
+// Assign a driver profile to an existing car, refreshing every profile-derived
+// field (behavior params, personal speed factor, paint color).
+function setCarProfile(car, name) {
+  car.profName = name;
+  car.prof = PROFILES[name];
+  car.speedFactor = rollSpeedFactor(name);
+  car.color = carColor(name, car.isTruck);
+}
+
+// Re-roll the existing fleet so the truck/profile mix matches the sliders
+// immediately. Without this, % sliders only affected newly spawned cars, and
+// on a ring with low turnover the fleet kept its old mix forever, so the
+// sliders appeared dead. Converts the minimum number of randomly chosen cars;
+// the "trucks are never aggressive" rule is preserved.
+function retuneFleet() {
+  const cars = sim.cars, n = cars.length;
+  if (!n) return;
+  const pick = pool => pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+
+  // 1. Truck share.
+  const wantTrucks = Math.round(n * sim.pctTrucks / 100);
+  const nTrucks = cars.filter(c => c.isTruck).length;
+  if (nTrucks > wantTrucks) {
+    const pool = cars.filter(c => c.isTruck);
+    for (let k = nTrucks - wantTrucks; k > 0 && pool.length; k--) {
+      const c = pick(pool);
+      c.isTruck = false;
+      setCarProfile(c, c.profName); // refresh color & speed factor as a car
+    }
+  } else if (nTrucks < wantTrucks) {
+    const pool = cars.filter(c => !c.isTruck);
+    for (let k = wantTrucks - nTrucks; k > 0 && pool.length; k--) {
+      const c = pick(pool);
+      c.isTruck = true;
+      c.v = Math.min(c.v, Math.floor(TRUCK_VMAX)); // governed cap applies now
+      setCarProfile(c, c.profName === 'aggressive' ? 'normal' : c.profName);
+    }
+  }
+
+  // 2. Aggressive share (drawn from non-truck, non-aggressive cars).
+  const wantAgg = Math.round(n * sim.pctAgg / 100);
+  const nAgg = cars.filter(c => c.profName === 'aggressive').length;
+  if (nAgg > wantAgg) {
+    const pool = cars.filter(c => c.profName === 'aggressive');
+    for (let k = nAgg - wantAgg; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'normal');
+  } else if (nAgg < wantAgg) {
+    const pool = cars.filter(c => !c.isTruck && c.profName === 'normal');
+    pool.push(...cars.filter(c => !c.isTruck && c.profName === 'passive'));
+    for (let k = wantAgg - nAgg; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'aggressive');
+  }
+
+  // 3. Passive share (trucks may be passive).
+  const wantPas = Math.round(n * sim.pctPas / 100);
+  const nPas = cars.filter(c => c.profName === 'passive').length;
+  if (nPas > wantPas) {
+    const pool = cars.filter(c => c.profName === 'passive');
+    for (let k = nPas - wantPas; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'normal');
+  } else if (nPas < wantPas) {
+    const pool = cars.filter(c => c.profName === 'normal');
+    for (let k = wantPas - nPas; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'passive');
+  }
 }
 
 //──────────────────────────── Sim tick ────────────────────────────
@@ -602,8 +957,9 @@ function tick() {
 
 //──────────────────────────── Reset / seeding ────────────────────────────
 // Reset rebuilds the world. The road is pre-seeded to the target population
-// (uniformly spread); afterwards all population changes flow through the
-// on-ramp / left-edge spawn and wrap-point despawn rules.
+// (uniformly spread); afterwards small population changes flow through the
+// on-ramp / left-edge spawn and wrap-point despawn rules, while large slider
+// moves converge quickly via convergePopulation().
 function resetSim() {
   sim.cars = [];
   sim.rampQueue = 0;
@@ -681,7 +1037,14 @@ function updateMetrics() {
   $('mRating').textContent = fmt(rating, 0);
   const bar = $('gaugeBar');
   bar.style.width = (Number.isFinite(rating) ? rating : 0) + '%';
-  bar.style.background = rating < 33 ? 'var(--good)' : rating < 66 ? 'var(--warn)' : 'var(--bad)';
+  const band = !Number.isFinite(rating) || rating < 33 ? 0 : rating < 66 ? 1 : 2;
+  bar.style.background = [
+    'linear-gradient(90deg,#2cb863,#5fdc8f)',
+    'linear-gradient(90deg,#dcae33,#f6d36c)',
+    'linear-gradient(90deg,#df4a3f,#ff7d66)',
+  ][band];
+  $('mRating').style.color = Number.isFinite(rating)
+    ? ['var(--good)', 'var(--warn)', 'var(--bad)'][band] : 'var(--text)';
 
   if (cfg().hasRamp) {
     const onRamp = cars.filter(c => c.lane === rampLaneIdx()).length;
@@ -703,27 +1066,63 @@ function updateMetrics() {
 
 function drawSpark() {
   const cv = $('spark'), g = cv.getContext('2d');
-  g.clearRect(0, 0, cv.width, cv.height);
+  // Crisp at any zoom: back the canvas at devicePixelRatio resolution,
+  // sized from its CSS box (falls back to the attribute size pre-layout).
+  const sdpr = window.devicePixelRatio || 1;
+  const cw2 = cv.clientWidth || 248, ch2 = cv.clientHeight || 60;
+  const pw = Math.max(1, Math.round(cw2 * sdpr)), ph = Math.max(1, Math.round(ch2 * sdpr));
+  if (cv.width !== pw || cv.height !== ph) { cv.width = pw; cv.height = ph; }
+  g.setTransform(sdpr, 0, 0, sdpr, 0, 0);
+  g.clearRect(0, 0, cw2, ch2);
+
   const data = sim.speedHistory;
   if (data.length < 2) return;
-  const max = Math.max(sim.speedMph, ...data) * 1.05;
-  g.strokeStyle = '#4da3ff'; g.lineWidth = 1.5; g.beginPath();
-  data.forEach((v, i) => {
-    const x = i / 119 * (cv.width - 4) + 2;
-    const y = cv.height - 3 - (v / max) * (cv.height - 8);
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  });
+  const max = Math.max(sim.speedMph, ...data) * 1.08;
+  const X = i => i / 119 * (cw2 - 8) + 4;
+  const Y = v => ch2 - 5 - (v / max) * (ch2 - 12);
+
+  // speed-limit dashed reference
+  g.strokeStyle = 'rgba(240,194,75,.4)'; g.lineWidth = 1; g.setLineDash([4, 4]);
+  g.beginPath(); g.moveTo(4, Y(sim.speedMph)); g.lineTo(cw2 - 4, Y(sim.speedMph));
+  g.stroke(); g.setLineDash([]);
+
+  // gradient area fill under the trace
+  const fill = g.createLinearGradient(0, 0, 0, ch2);
+  fill.addColorStop(0, 'rgba(88,166,255,.32)');
+  fill.addColorStop(1, 'rgba(88,166,255,0)');
+  g.beginPath();
+  data.forEach((v, i) => { i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)); });
+  g.lineTo(X(data.length - 1), ch2 - 2); g.lineTo(X(0), ch2 - 2); g.closePath();
+  g.fillStyle = fill; g.fill();
+
+  // the trace itself, with a glowing endpoint dot on the live sample
+  g.strokeStyle = '#58a6ff'; g.lineWidth = 1.6; g.lineJoin = 'round'; g.lineCap = 'round';
+  g.beginPath();
+  data.forEach((v, i) => { i ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)); });
   g.stroke();
-  // speed-limit reference line
-  g.strokeStyle = 'rgba(230,197,74,.45)'; g.setLineDash([3, 3]); g.beginPath();
-  const yl = cv.height - 3 - (sim.speedMph / max) * (cv.height - 8);
-  g.moveTo(2, yl); g.lineTo(cv.width - 2, yl); g.stroke(); g.setLineDash([]);
+  const ex = X(data.length - 1), ey = Y(data[data.length - 1]);
+  g.fillStyle = 'rgba(88,166,255,.35)';
+  g.beginPath(); g.arc(ex, ey, 4.5, 0, 7); g.fill();
+  g.fillStyle = '#bcd9ff';
+  g.beginPath(); g.arc(ex, ey, 2, 0, 7); g.fill();
 }
 
 //──────────────────────────── Rendering ────────────────────────────
+// Two-layer renderer. All static scenery (terrain, asphalt texture, lane
+// markings, ramps, guardrails, buildings, streetlights, crosswalks, sensor)
+// is pre-rendered into an offscreen canvas and blitted once per frame; only
+// dynamic elements — vehicles, signal lamps, ramp meter/queue, the incident
+// and weather — are drawn per frame, so the 60 fps loop stays cheap even
+// with 200 cars. The static layer is rebuilt lazily whenever its signature
+// (canvas size / dpr / scenario / lanes / merge shape / weather) changes.
 const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
-let W = 0, H = 300, dpr = 1;
+let W = 0, H = 380, dpr = 1;
+
+const scene = document.createElement('canvas');  // offscreen static scenery
+const sctx = scene.getContext('2d');
+let sceneSig = '';
+let fogGrad = null;                              // cached fog gradient
 
 function resizeCanvas() {
   dpr = window.devicePixelRatio || 1;
@@ -735,8 +1134,8 @@ function resizeCanvas() {
 }
 window.addEventListener('resize', resizeCanvas);
 
-const LANE_H = 22;
-function roadTop() { return cfg().style === 'city' ? 130 : 70; }
+const LANE_H = 26;
+function roadTop() { return cfg().style === 'city' ? 150 : 104; }
 function cw() { return W / N; }
 // Interpolated position in cells, handling ring wrap.
 function lerpPos(car, a) {
@@ -745,187 +1144,692 @@ function lerpPos(car, a) {
   return (car.prevCell + (to - car.prevCell) * a) % N;
 }
 
+// Rounded-rect fill helper (radius clamped so tiny shapes stay valid).
+function rr(g, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  if (r <= 0.5) { g.fillRect(x, y, w, h); return; }
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+  g.fill();
+}
+
+// Deterministic PRNG for scenery decoration — identical across rebuilds.
+function sceneRand(seed) {
+  let s = seed;
+  return () => { s = (s * 16807) % 2147483647; return s / 2147483647; };
+}
+
+//—— Static-layer painters shared by both scenes ——
+function paintAsphalt(g, top, rh, rnd) {
+  const grad = g.createLinearGradient(0, top, 0, top + rh);
+  grad.addColorStop(0, '#36373c'); grad.addColorStop(0.5, '#3e3f45'); grad.addColorStop(1, '#35363b');
+  g.fillStyle = grad; g.fillRect(0, top, W, rh);
+  // tire-wear tracks: two darker streaks per lane
+  g.fillStyle = 'rgba(0,0,0,.10)';
+  for (let l = 0; l < sim.lanes; l++) {
+    const yc = top + l * LANE_H + LANE_H / 2;
+    g.fillRect(0, yc - LANE_H * 0.27, W, 2.5);
+    g.fillRect(0, yc + LANE_H * 0.27 - 2.5, W, 2.5);
+  }
+  // gravel specks & faint patches
+  for (let i = 0; i < 240; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(255,255,255,.035)' : 'rgba(0,0,0,.06)';
+    g.fillRect(rnd() * W, top + rnd() * rh, 1 + rnd() * 3, 1 + rnd() * 1.5);
+  }
+  // occasional cracks / tar seams
+  g.strokeStyle = 'rgba(0,0,0,.09)'; g.lineWidth = 1;
+  g.beginPath();
+  for (let i = 0; i < 9; i++) {
+    const x = rnd() * W, y = top + rnd() * rh;
+    g.moveTo(x, y); g.lineTo(x + 12 + rnd() * 34, y + (rnd() - 0.5) * 7);
+  }
+  g.stroke();
+}
+
+function paintLaneDashes(g, top) {
+  g.fillStyle = '#d9dade';
+  const dash = Math.max(9, cw() * 2), gap = dash * 1.7;
+  for (let l = 1; l < sim.lanes; l++) {
+    const y = top + l * LANE_H - 1;
+    for (let x = 4; x < W; x += dash + gap) g.fillRect(x, y, dash, 2);
+  }
+}
+
+// Wet-road sheen baked into the static layer when it's raining.
+function paintWetSheen(g, top, rh) {
+  const grad = g.createLinearGradient(0, top, 0, top + rh);
+  grad.addColorStop(0, 'rgba(150,180,220,.09)');
+  grad.addColorStop(0.5, 'rgba(195,215,245,.16)');
+  grad.addColorStop(1, 'rgba(150,180,220,.09)');
+  g.fillStyle = grad; g.fillRect(0, top, W, rh);
+  // reflective glaze along each lane center
+  g.fillStyle = 'rgba(215,228,250,.07)';
+  for (let l = 0; l < sim.lanes; l++) {
+    g.fillRect(0, top + l * LANE_H + LANE_H / 2 - 2, W, 4);
+  }
+}
+
+function drawGuardrail(g, x0, x1, y) {
+  if (x1 - x0 < 20) return;
+  g.fillStyle = '#565963';
+  for (let x = x0 + 6; x < x1 - 4; x += 26) g.fillRect(x, y, 2, 6);
+  g.fillStyle = '#9ba0ab'; g.fillRect(x0, y - 3, x1 - x0, 3);
+  g.fillStyle = 'rgba(255,255,255,.35)'; g.fillRect(x0, y - 3, x1 - x0, 1);
+}
+
+// Split [x0,x1] into rail segments avoiding the given gap intervals.
+function railSegs(x0, x1, gaps) {
+  let segs = [[x0, x1]];
+  for (const gp of gaps) {
+    const out = [];
+    for (const s of segs) {
+      if (gp[1] <= s[0] || gp[0] >= s[1]) { out.push(s); continue; }
+      if (gp[0] > s[0]) out.push([s[0], gp[0]]);
+      if (gp[1] < s[1]) out.push([gp[1], s[1]]);
+    }
+    segs = out;
+  }
+  return segs;
+}
+
+// (Re)build the offscreen static layer at device resolution.
+function buildScene() {
+  scene.width = Math.max(1, Math.round(W * dpr));
+  scene.height = Math.max(1, Math.round(H * dpr));
+  sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sctx.clearRect(0, 0, W, H);
+  if (cfg().style === 'city') buildCityStatic(sctx); else buildHighwayStatic(sctx);
+  // fog gradient: thinnest over the road, thicker toward the canvas edges
+  const mid = Math.max(0.05, Math.min(0.95, (roadTop() + sim.lanes * LANE_H / 2) / H));
+  fogGrad = ctx.createLinearGradient(0, 0, 0, H);
+  fogGrad.addColorStop(0, 'rgba(206,213,224,.62)');
+  fogGrad.addColorStop(mid, 'rgba(206,213,224,.22)');
+  fogGrad.addColorStop(1, 'rgba(206,213,224,.58)');
+}
+
 function render() {
   const a = sim.paused ? 1 : Math.min(1, (performance.now() - sim.lastTickWall) / TICK_MS);
+  const sig = W + '|' + H + '|' + dpr + '|' + sim.scenario + '|' + sim.lanes + '|' +
+              sim.mergeShape + '|' + sim.weather + '|' + sim.buildings.length;
+  if (sig !== sceneSig) { sceneSig = sig; buildScene(); }
   ctx.clearRect(0, 0, W, H);
+  ctx.drawImage(scene, 0, 0, W, H);
   if (cfg().style === 'city') drawCityScene(); else drawHighwayScene();
   drawCars(a);
   drawWeatherOverlay();
 }
 
-//—— Highway backdrop: grass, asphalt, lane markings, ramps, incident ——
-function drawHighwayScene() {
+//—— Highway static layer: terrain, asphalt, markings, ramps, guardrails ——
+function buildHighwayStatic(g) {
   const top = roadTop(), rh = sim.lanes * LANE_H, c = cw();
-  ctx.fillStyle = '#27381f'; ctx.fillRect(0, 0, W, H);             // roadside green
-  ctx.fillStyle = '#3a3b40'; ctx.fillRect(0, top, W, rh);          // asphalt
-  ctx.fillStyle = '#d8d8d8';                                       // solid shoulders
-  ctx.fillRect(0, top + 1, W, 2); ctx.fillRect(0, top + rh - 3, W, 2);
-  ctx.fillStyle = '#cfcfcf';                                       // dashed dividers
-  for (let l = 1; l < sim.lanes; l++) {
-    const y = top + l * LANE_H - 1;
-    for (let x = 0; x < W; x += 26) ctx.fillRect(x, y, 13, 2);
-  }
-
-  // Acceleration lane (on-ramp) below the rightmost lane
   const rs = rampStart() * c, rl = rampLen() * c, ry = top + rh;
-  ctx.fillStyle = '#3a3b40';
-  ctx.beginPath();
-  ctx.moveTo(rs, ry); ctx.lineTo(rs + rl + 14, ry);
-  ctx.lineTo(rs + rl - 6, ry + LANE_H); ctx.lineTo(rs - 30, ry + LANE_H);
-  ctx.closePath(); ctx.fill();
-  // approach ramp diagonal
-  ctx.fillStyle = '#35363b';
-  ctx.beginPath();
-  ctx.moveTo(rs - 30, ry + LANE_H); ctx.lineTo(rs + 8, ry + LANE_H);
-  ctx.lineTo(rs - 18, ry + LANE_H + 64); ctx.lineTo(rs - 58, ry + LANE_H + 64);
-  ctx.closePath(); ctx.fill();
-  // queue visualization on the approach
-  const q = Math.min(sim.rampQueue, 8);
-  for (let i = 0; i < q; i++) {
-    ctx.fillStyle = '#9aa0ad';
-    ctx.fillRect(rs - 14 - i * 5, ry + LANE_H + 10 + i * 6, 9, 5);
+  const rnd = sceneRand(424243);
+
+  // terrain: layered green gradient with mottling, tufts, bushes
+  const tg = g.createLinearGradient(0, 0, 0, H);
+  tg.addColorStop(0, '#2e4326'); tg.addColorStop(0.45, '#283a20'); tg.addColorStop(1, '#20301a');
+  g.fillStyle = tg; g.fillRect(0, 0, W, H);
+  for (let i = 0; i < 150; i++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(210,230,150,.05)' : 'rgba(0,0,0,.09)';
+    g.beginPath();
+    g.ellipse(rnd() * W, rnd() * H, 10 + rnd() * 30, 3 + rnd() * 8, 0, 0, 7);
+    g.fill();
   }
-  if (sim.rampQueue > 8) {
-    ctx.fillStyle = '#cfd2da'; ctx.font = '11px system-ui';
-    ctx.fillText('+' + (sim.rampQueue - 8), rs - 66, ry + LANE_H + 60);
+  g.strokeStyle = 'rgba(165,195,115,.38)'; g.lineWidth = 1;
+  g.beginPath();
+  for (let i = 0; i < 90; i++) {                       // grass tufts
+    const x = rnd() * W, y = rnd() * H;
+    g.moveTo(x, y); g.lineTo(x - 2, y - 3);
+    g.moveTo(x, y); g.lineTo(x, y - 4);
+    g.moveTo(x, y); g.lineTo(x + 2, y - 3);
   }
-  // ramp meter signal
-  if (sim.meterOn) {
-    const green = sim.meterTimer >= sim.meterInterval - 1;
-    ctx.fillStyle = '#222'; ctx.fillRect(rs - 8, ry + 2, 7, 16);
-    ctx.beginPath(); ctx.arc(rs - 4.5, ry + 7, 2.6, 0, 7);
-    ctx.fillStyle = green ? '#39c46a' : '#e85149'; ctx.fill();
+  g.stroke();
+  for (let i = 0; i < 22; i++) {                       // bushes / tree canopies
+    const x = rnd() * W, y = rnd() * H, r = 4 + rnd() * 8;
+    g.fillStyle = 'rgba(0,0,0,.25)';
+    g.beginPath(); g.ellipse(x + 2, y + 2.5, r, r * 0.55, 0, 0, 7); g.fill();
+    g.fillStyle = `hsl(${100 + rnd() * 30},${30 + rnd() * 20}%,${20 + rnd() * 12}%)`;
+    g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    g.fillStyle = 'rgba(255,255,210,.10)';
+    g.beginPath(); g.arc(x - r * 0.3, y - r * 0.3, r * 0.55, 0, 7); g.fill();
   }
 
-  // Off-ramp wedge (interchange)
+  // shoulders with rumble strips (road & ramp pave over them below)
+  g.fillStyle = '#46474d';
+  g.fillRect(0, top - 7, W, 7); g.fillRect(0, ry, W, 7);
+  g.fillStyle = 'rgba(0,0,0,.25)';
+  for (let x = 0; x < W; x += 7) { g.fillRect(x, top - 5, 3, 2); g.fillRect(x, ry + 2.6, 3, 2); }
+
+  // mainline asphalt + edge lines + dashes
+  paintAsphalt(g, top, rh, rnd);
+  g.fillStyle = '#e6c84e'; g.fillRect(0, top + 1.5, W, 2);   // yellow left-edge line
+  g.fillStyle = '#e4e5e9'; g.fillRect(0, ry - 3.5, W, 2);    // white right-edge line
+  paintLaneDashes(g, top);
+
+  // on-ramp approach roadway (diagonal) with edge lines
+  g.fillStyle = '#36373c';
+  g.beginPath();
+  g.moveTo(rs - 30, ry + LANE_H); g.lineTo(rs + 8, ry + LANE_H);
+  g.lineTo(rs - 18, ry + LANE_H + 70); g.lineTo(rs - 60, ry + LANE_H + 70);
+  g.closePath(); g.fill();
+  g.strokeStyle = '#caccd2'; g.lineWidth = 1.5;
+  g.beginPath();
+  g.moveTo(rs - 28, ry + LANE_H); g.lineTo(rs - 58, ry + LANE_H + 70);
+  g.moveTo(rs + 6, ry + LANE_H); g.lineTo(rs - 16, ry + LANE_H + 70);
+  g.stroke();
+
+  // acceleration lane with end taper
+  g.fillStyle = '#3b3c41';
+  g.beginPath();
+  g.moveTo(rs - 4, ry); g.lineTo(rs + rl + 16, ry);
+  g.lineTo(rs + rl - 6, ry + LANE_H); g.lineTo(rs - 34, ry + LANE_H);
+  g.closePath(); g.fill();
+  // mainline edge becomes dotted across the merge area
+  g.fillStyle = '#3b3c41'; g.fillRect(rs - 4, ry - 4.5, rl + 20, 4.5);
+  g.fillStyle = '#e4e5e9';
+  for (let x = rs - 2; x < rs + rl + 10; x += 12) g.fillRect(x, ry - 3.5, 6, 2);
+  // accel-lane outer edge line
+  g.fillRect(rs - 32, ry + LANE_H - 3, rl + 24, 1.8);
+  // gore chevrons in the end taper
+  g.strokeStyle = 'rgba(230,231,236,.7)'; g.lineWidth = 2;
+  g.beginPath();
+  for (let k = 0; k < 4; k++) {
+    const gx = rs + rl - 2 + k * 5;
+    g.moveTo(gx, ry + 2); g.lineTo(gx + 9, ry + LANE_H - 4);
+  }
+  g.stroke();
+
+  // off-ramp (interchange): exit wedge, gore striping, EXIT sign
   if (cfg().hasOffRamp) {
     const ox = cfg().offRampCell * c;
-    ctx.fillStyle = '#35363b';
-    ctx.beginPath();
-    ctx.moveTo(ox - 40, ry); ctx.lineTo(ox + 4, ry);
-    ctx.lineTo(ox + 44, ry + 52); ctx.lineTo(ox + 6, ry + 52);
-    ctx.closePath(); ctx.fill();
-    ctx.fillStyle = '#cfd2da'; ctx.font = '10px system-ui';
-    ctx.fillText('EXIT', ox + 14, ry + 40);
-  }
-
-  // Incident: crashed phantom car + cones in the rightmost lane at cell 100
-  if (sim.incident && cfg().hasIncident) {
-    const ix = INCIDENT_CELL * c, iy = top + (sim.lanes - 1) * LANE_H;
-    ctx.fillStyle = '#666a73';
-    ctx.fillRect(ix, iy + LANE_H * 0.28, c * 0.9, LANE_H * 0.45);
-    ctx.fillStyle = '#ff8c2e';
-    for (let k = 0; k < 3; k++) {
-      const cx2 = ix - 6 - k * 7;
-      ctx.beginPath();
-      ctx.moveTo(cx2, iy + LANE_H * 0.7); ctx.lineTo(cx2 + 5, iy + LANE_H * 0.7);
-      ctx.lineTo(cx2 + 2.5, iy + LANE_H * 0.25); ctx.closePath(); ctx.fill();
+    g.fillStyle = '#36373c';
+    g.beginPath();
+    g.moveTo(ox - 44, ry); g.lineTo(ox + 4, ry);
+    g.lineTo(ox + 48, ry + 56); g.lineTo(ox + 8, ry + 56);
+    g.closePath(); g.fill();
+    g.strokeStyle = '#caccd2'; g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(ox - 42, ry); g.lineTo(ox + 9, ry + 56);
+    g.moveTo(ox + 3, ry); g.lineTo(ox + 46, ry + 56);
+    g.stroke();
+    // dotted mainline edge across the exit mouth
+    g.fillStyle = '#3b3c41'; g.fillRect(ox - 44, ry - 4.5, 50, 4.5);
+    g.fillStyle = '#e4e5e9';
+    for (let x = ox - 42; x < ox + 2; x += 12) g.fillRect(x, ry - 3.5, 6, 2);
+    // gore chevrons between exit and mainline
+    g.strokeStyle = 'rgba(230,231,236,.65)'; g.lineWidth = 2;
+    g.beginPath();
+    for (let k = 1; k <= 3; k++) {
+      g.moveTo(ox + 7, ry + k * 9); g.lineTo(ox + 7 + k * 7, ry + k * 9 + 6);
     }
+    g.stroke();
+    // EXIT board
+    g.fillStyle = '#0f7a3d'; rr(g, ox + 28, ry + 26, 34, 16, 2);
+    g.strokeStyle = '#e8f5ee'; g.lineWidth = 1; g.strokeRect(ox + 29.5, ry + 27.5, 31, 13);
+    g.fillStyle = '#fff'; g.font = 'bold 9px system-ui'; g.textAlign = 'center';
+    g.fillText('EXIT', ox + 45, ry + 37);
+    g.textAlign = 'left';
   }
 
-  drawSensor(top, rh);
+  // guardrails: continuous along the top, gapped at the ramps below
+  drawGuardrail(g, 0, W, top - 11);
+  const gaps = [[rs - 80, rs + rl + 34]];
+  if (cfg().hasOffRamp) {
+    const ox = cfg().offRampCell * c;
+    gaps.push([ox - 60, ox + 64]);
+  }
+  for (const s of railSegs(0, W, gaps)) drawGuardrail(g, s[0], s[1], ry + 11);
+
+  if (sim.weather === 'rain') {
+    paintWetSheen(g, top, rh);
+    g.fillStyle = 'rgba(170,195,235,.10)';            // accel lane gets the glaze too
+    g.fillRect(rs - 34, ry, rl + 50, LANE_H);
+  }
+  drawSensor(g, top, rh);
 }
 
-//—— City backdrop: buildings, sidewalks, crosswalks, signal heads ——
-function drawCityScene() {
+//—— Highway dynamic layer: ramp queue, meter signal, incident ——
+function drawHighwayScene() {
   const top = roadTop(), rh = sim.lanes * LANE_H, c = cw();
-  ctx.fillStyle = '#1b1c22'; ctx.fillRect(0, 0, W, H);             // night sky / ground
-  // buildings
-  for (const b of sim.buildings) {
-    const x = b.c0 * c, w = b.w * c;
-    const y = b.side === 'top' ? top - 14 - b.h : top + rh + 14;
-    ctx.fillStyle = `hsl(228,10%,${b.shade}%)`;
-    ctx.fillRect(x, y, w - 2, b.h);
-    if (b.win) {
-      ctx.fillStyle = 'rgba(255,214,120,.55)';
-      for (let wx = x + 3; wx < x + w - 6; wx += 7)
-        for (let wy = y + 4; wy < y + b.h - 5; wy += 8)
-          if ((wx * 7 + wy * 13) % 5 < 2) ctx.fillRect(wx, wy, 3, 4);
+  const rs = rampStart() * c, ry = top + rh;
+
+  // queued cars angled along the approach ramp
+  const q = Math.min(sim.rampQueue, 8);
+  if (q > 0) {
+    const ang = Math.atan2(-70, 28);                  // direction of travel up-ramp
+    for (let i = 0; i < q; i++) {
+      const t = 0.12 + i * 0.105;
+      ctx.save();
+      ctx.translate(rs - 11 - 28 * t, ry + LANE_H + 70 * t);
+      ctx.rotate(ang);
+      ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(-4.6, -2.2, 10.6, 5.6);
+      ctx.fillStyle = '#a7adba'; rr(ctx, -5, -2.8, 10, 5.2, 1.5);
+      ctx.fillStyle = 'rgba(18,26,38,.75)'; ctx.fillRect(0.8, -2.1, 1.8, 3.8);
+      ctx.restore();
     }
   }
-  // sidewalks
-  ctx.fillStyle = '#55565e';
-  ctx.fillRect(0, top - 10, W, 10); ctx.fillRect(0, top + rh, W, 10);
-  // asphalt + markings
-  ctx.fillStyle = '#3a3b40'; ctx.fillRect(0, top, W, rh);
-  ctx.fillStyle = '#cfcfcf';
-  for (let l = 1; l < sim.lanes; l++) {
-    const y = top + l * LANE_H - 1;
-    for (let x = 0; x < W; x += 26) ctx.fillRect(x, y, 13, 2);
+  if (sim.rampQueue > 8) {
+    ctx.fillStyle = '#dfe2ea'; ctx.font = '11px system-ui';
+    ctx.fillText('+' + (sim.rampQueue - 8), rs - 74, ry + LANE_H + 64);
   }
-  // crosswalks + signal heads at each light
-  cfg().lightCells.forEach((lc, i) => {
-    const x = (lc + 1) * c;
-    ctx.fillStyle = 'rgba(230,230,230,.85)';
-    for (let y = top + 2; y < top + rh - 2; y += 7) ctx.fillRect(x, y, c * 1.6, 4);
-    // stop line
-    ctx.fillStyle = '#e8e8e8'; ctx.fillRect(lc * c - 2, top, 3, rh);
-    // signal head on a pole above the road
-    const st = lightState(i);
-    const sx = lc * c - 5, sy = top - 44;
-    ctx.strokeStyle = '#202127'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(sx + 5, sy + 30); ctx.lineTo(sx + 5, top - 10); ctx.stroke();
-    ctx.fillStyle = '#16171c'; ctx.fillRect(sx, sy, 11, 30);
-    const lamps = [['red', '#e85149'], ['yellow', '#e6c54a'], ['green', '#39c46a']];
-    lamps.forEach(([name, col], k) => {
-      ctx.beginPath(); ctx.arc(sx + 5.5, sy + 6 + k * 9, 3.4, 0, 7);
-      ctx.fillStyle = st === name ? col : '#33343c'; ctx.fill();
-    });
-  });
-  drawSensor(top, rh);
+
+  // ramp meter: two-lamp signal head with glow on the active lamp
+  if (sim.meterOn) {
+    const green = sim.meterTimer >= sim.meterInterval - 1;
+    const mx = rs - 12, my = ry + 3;
+    ctx.fillStyle = '#3c3e45'; ctx.fillRect(mx + 3, my + 14, 2, 8);   // pole
+    ctx.fillStyle = '#15161b'; rr(ctx, mx, my, 8, 15, 2);             // housing
+    ctx.beginPath(); ctx.arc(mx + 4, my + 4.5, 2.5, 0, 7);
+    ctx.fillStyle = green ? '#46221f' : '#ff5148'; ctx.fill();
+    ctx.beginPath(); ctx.arc(mx + 4, my + 10.5, 2.5, 0, 7);
+    ctx.fillStyle = green ? '#46e07c' : '#1d4a2c'; ctx.fill();
+    ctx.fillStyle = green ? 'rgba(70,224,124,.25)' : 'rgba(255,81,72,.25)';
+    ctx.beginPath(); ctx.arc(mx + 4, green ? my + 10.5 : my + 4.5, 5.5, 0, 7); ctx.fill();
+  }
+
+  // incident: skid marks, crashed car skewed across the lane, cones, flare
+  if (sim.incident && cfg().hasIncident) {
+    const ix = INCIDENT_CELL * c, iy = top + (sim.lanes - 1) * LANE_H, yc = iy + LANE_H / 2;
+    ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(ix - 26, yc - 4); ctx.quadraticCurveTo(ix - 10, yc - 6, ix - 1, yc - 2);
+    ctx.moveTo(ix - 26, yc + 3); ctx.quadraticCurveTo(ix - 12, yc + 2, ix - 1, yc + 4);
+    ctx.stroke();
+    ctx.save();
+    ctx.translate(ix + c * 0.45, yc); ctx.rotate(0.42);
+    const cl = Math.max(8, c * 0.95), chh = LANE_H * 0.42;
+    ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(-cl / 2 + 1, -chh / 2 + 1.5, cl, chh);
+    ctx.fillStyle = '#7d828d'; rr(ctx, -cl / 2, -chh / 2, cl, chh, 2);
+    ctx.fillStyle = 'rgba(18,26,38,.8)'; ctx.fillRect(cl * 0.08, -chh / 2 + 1, 2, chh - 2);
+    ctx.fillStyle = '#4c4f57'; ctx.fillRect(cl / 2 - 3, -chh / 2, 3, chh);  // crumpled nose
+    ctx.restore();
+    // pulsing hazard-flare glow
+    ctx.fillStyle = '#ff8c2e';
+    ctx.globalAlpha = 0.18 + 0.10 * Math.sin(performance.now() / 250);
+    ctx.beginPath(); ctx.arc(ix - 8, yc + 5, 9, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+    // traffic cones with reflective bands
+    for (let k = 0; k < 3; k++) {
+      const cx2 = ix - 7 - k * 8, cy2 = iy + LANE_H * 0.78;
+      ctx.fillStyle = '#ff8c2e';
+      ctx.beginPath();
+      ctx.moveTo(cx2 - 2.6, cy2); ctx.lineTo(cx2 + 2.6, cy2); ctx.lineTo(cx2, cy2 - 7);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.fillRect(cx2 - 1.4, cy2 - 4.4, 2.8, 1.3);
+    }
+  }
 }
 
-function drawSensor(top, rh) {
+//—— City static layer: night sky, skyline, sidewalks, asphalt, crosswalks,
+//    signal poles/housings, streetlights with light pools, sensor ——
+// Signal-head geometry shared with the dynamic lamp pass in drawCityScene().
+function signalHeadX(lc) { return lc * cw() - 5; }
+function signalHeadY() { return roadTop() - 46; }
+
+function buildCityStatic(g) {
+  const top = roadTop(), rh = sim.lanes * LANE_H, c = cw();
+  const rnd = sceneRand(902101);
+
+  // night sky → street-level glow → ground
+  const sky = g.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#0f1220'); sky.addColorStop(0.3, '#171927');
+  sky.addColorStop(0.55, '#1d1e26'); sky.addColorStop(1, '#16171c');
+  g.fillStyle = sky; g.fillRect(0, 0, W, H);
+  for (let i = 0; i < 70; i++) {                       // stars
+    g.fillStyle = `rgba(225,232,255,${(0.2 + rnd() * 0.5).toFixed(2)})`;
+    g.fillRect(rnd() * W, rnd() * (top - 80), 1, 1);
+  }
+  g.fillStyle = '#d9dce8';                             // crescent moon
+  g.beginPath(); g.arc(W * 0.86, 34, 11, 0, 7); g.fill();
+  g.fillStyle = '#11131f';
+  g.beginPath(); g.arc(W * 0.86 - 5, 31, 9.5, 0, 7); g.fill();
+
+  // distant skyline behind the foreground blocks (stable, for depth)
+  let bx = -10;
+  while (bx < W) {
+    const bw = 24 + rnd() * 50, bh = 46 + rnd() * 56;
+    g.fillStyle = `hsl(230,12%,${(11 + rnd() * 4).toFixed(1)}%)`;
+    g.fillRect(bx, top - 14 - bh, bw, bh);
+    if (rnd() < 0.5) {                                 // faint distant windows
+      g.fillStyle = 'rgba(200,215,255,.10)';
+      for (let wy = top - 8 - bh; wy < top - 26; wy += 9)
+        g.fillRect(bx + 3 + rnd() * (bw - 8), wy, 2, 3);
+    }
+    bx += bw + 4 + rnd() * 14;
+  }
+
+  // foreground buildings from sim.buildings, enriched with varied rooflines,
+  // rooftop details and antennas (deterministic via the shared rnd stream)
+  for (const b of sim.buildings) {
+    const x = b.c0 * c, w = b.w * c - 2;
+    const y = b.side === 'top' ? top - 14 - b.h : top + rh + 14;
+    const fg = g.createLinearGradient(x, 0, x + w, 0); // side-lit facade
+    fg.addColorStop(0, `hsl(228,10%,${b.shade + 4}%)`);
+    fg.addColorStop(1, `hsl(228,12%,${Math.max(10, b.shade - 5)}%)`);
+    g.fillStyle = fg; g.fillRect(x, y, w, b.h);
+    g.fillStyle = `hsl(228,8%,${b.shade + 10}%)`;      // parapet cap
+    if (b.side === 'top') g.fillRect(x - 1, y - 2, w + 2, 2.5);
+    else g.fillRect(x - 1, y + b.h - 0.5, w + 2, 2.5);
+    if (b.win) {
+      g.fillStyle = 'rgba(255,214,120,.5)';
+      for (let wx = x + 3; wx < x + w - 4; wx += 7)
+        for (let wy = y + 4; wy < y + b.h - 5; wy += 8)
+          if ((wx * 7 + wy * 13) % 5 < 2) g.fillRect(wx, wy, 3, 4);
+      g.fillStyle = 'rgba(150,200,255,.30)';           // a few cool TV-glow panes
+      for (let wx = x + 3; wx < x + w - 4; wx += 7)
+        for (let wy = y + 4; wy < y + b.h - 5; wy += 8)
+          if ((wx * 11 + wy * 17) % 23 < 1) g.fillRect(wx, wy, 3, 4);
+    }
+    if (b.side === 'top') {                            // rooftop furniture
+      const r = rnd();
+      if (r < 0.3 && w > 24) {                         // water tank
+        const tx = x + 4 + rnd() * (w - 14);
+        g.fillStyle = '#34353f'; g.fillRect(tx, y - 9, 9, 8);
+        g.fillStyle = '#3f414c';
+        g.beginPath(); g.moveTo(tx - 1, y - 9); g.lineTo(tx + 10, y - 9);
+        g.lineTo(tx + 4.5, y - 13); g.closePath(); g.fill();
+      } else if (r < 0.55 && w > 18) {                 // AC / vent boxes
+        g.fillStyle = '#3b3d48';
+        g.fillRect(x + w * 0.18, y - 4, 7, 4);
+        g.fillRect(x + w * 0.55, y - 5.5, 9, 5.5);
+      } else if (r < 0.72 && w > 14) {                 // stepped penthouse
+        g.fillStyle = `hsl(228,10%,${b.shade + 2}%)`;
+        g.fillRect(x + w * 0.25, y - 7, w * 0.45, 7);
+        g.fillStyle = `hsl(228,8%,${b.shade + 10}%)`;
+        g.fillRect(x + w * 0.25 - 1, y - 8.5, w * 0.45 + 2, 2);
+      }
+      if (rnd() < 0.3) {                               // antenna with beacon
+        const ax = x + w * (0.2 + rnd() * 0.6), ah = 10 + rnd() * 9;
+        g.strokeStyle = '#565866'; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(ax, y); g.lineTo(ax, y - ah); g.stroke();
+        g.fillStyle = '#e85149'; g.fillRect(ax - 1, y - ah - 1.5, 2, 2);
+      }
+    } else if (rnd() < 0.35 && w > 20) {               // street-level awning
+      g.fillStyle = `hsl(${(rnd() * 360) | 0},30%,32%)`;
+      g.fillRect(x + 2, y - 0.5, Math.min(w - 4, 18), 3);
+    }
+  }
+
+  // sidewalks with expansion joints, then curbs (drawn after the asphalt)
+  g.fillStyle = '#4d4e56';
+  g.fillRect(0, top - 12, W, 12); g.fillRect(0, top + rh, W, 12);
+  g.strokeStyle = 'rgba(0,0,0,.25)'; g.lineWidth = 1;
+  g.beginPath();
+  for (let x = 12; x < W; x += 34) {
+    g.moveTo(x, top - 12); g.lineTo(x, top);
+    g.moveTo(x + 17, top + rh); g.lineTo(x + 17, top + rh + 12);
+  }
+  g.stroke();
+
+  // asphalt + edge lines + dashes
+  paintAsphalt(g, top, rh, rnd);
+  g.fillStyle = '#e4e5e9';
+  g.fillRect(0, top + 1.5, W, 2); g.fillRect(0, top + rh - 3.5, W, 2);
+  paintLaneDashes(g, top);
+
+  // curb lines: lit face on the near curb, shadow under the far one
+  g.fillStyle = '#71737e'; g.fillRect(0, top - 2.5, W, 2.5);
+  g.fillStyle = 'rgba(255,255,255,.22)'; g.fillRect(0, top - 2.5, W, 1);
+  g.fillStyle = '#5e606b'; g.fillRect(0, top + rh, W, 2);
+  g.fillStyle = 'rgba(0,0,0,.30)'; g.fillRect(0, top + rh, W, 1);
+
+  // crosswalk zebras, stop lines, signal pole + housing at each light
+  for (const lc of cfg().lightCells) {
+    const x = (lc + 1) * c, zw = Math.max(10, c * 1.6);
+    g.fillStyle = 'rgba(0,0,0,.14)';                   // worn patch under the zebra
+    g.fillRect(x - 2, top, zw + 4, rh);
+    g.fillStyle = 'rgba(232,233,238,.88)';
+    for (let y = top + 3; y < top + rh - 3; y += 7) g.fillRect(x, y, zw, 4);
+    g.fillStyle = '#e8e8e8';                           // stop line
+    g.fillRect(lc * c - 3, top + 2, 3, rh - 4);
+
+    const sx = signalHeadX(lc), sy = signalHeadY();
+    g.fillStyle = '#23242b';                           // pole down to the sidewalk
+    g.fillRect(sx + 4, sy + 27, 3, top - 10 - (sy + 27));
+    g.fillStyle = '#2c2d35'; g.fillRect(sx + 2, top - 11, 7, 3);
+    g.fillStyle = '#0d0e12'; rr(g, sx - 2, sy - 2, 15, 33, 3);  // backplate
+    g.fillStyle = '#1a1b21'; rr(g, sx, sy, 11, 29, 2);          // housing
+    g.fillStyle = '#33343c';                           // dark lamps (lit per frame)
+    for (let k = 0; k < 3; k++) {
+      g.beginPath(); g.arc(sx + 5.5, sy + 5.5 + k * 9, 3.4, 0, 7); g.fill();
+    }
+    g.fillStyle = '#0b0c10';                           // visors
+    for (let k = 0; k < 3; k++) g.fillRect(sx + 1.5, sy + 1 + k * 9, 8, 1.5);
+  }
+
+  // streetlights: curved poles with warm light pools on the roadway,
+  // mirrored on the far side to match the mirrored skyline
+  for (const [cell, side] of [[25, 0], [85, 0], [145, 0], [55, 1], [130, 1], [185, 1]]) {
+    const x = cell * c;
+    const by = side ? top + rh + 3 : top - 3;          // base at the curb
+    const dir = side ? 1 : -1;                         // pole extends off-road
+    g.strokeStyle = '#3a3c46'; g.lineWidth = 2.5;
+    g.beginPath();
+    g.moveTo(x, by); g.lineTo(x, by + dir * 32);
+    g.quadraticCurveTo(x, by + dir * 41, x + 10, by + dir * 41);
+    g.stroke();
+    g.fillStyle = '#ffd98f';                           // lamp head
+    rr(g, x + 7, by + dir * 41 - 1.5, 8, 3, 1.5);
+    g.fillStyle = 'rgba(255,214,140,.16)';             // halo at the head
+    g.beginPath(); g.arc(x + 11, by + dir * 40, 7, 0, 7); g.fill();
+    const py = side ? top + rh - 8 : top + 8;          // soft pool on the road
+    const pg = g.createRadialGradient(x + 11, py, 2, x + 11, py, 34);
+    pg.addColorStop(0, 'rgba(255,210,130,.15)');
+    pg.addColorStop(1, 'rgba(255,210,130,0)');
+    g.fillStyle = pg;
+    g.beginPath(); g.ellipse(x + 11, py, 34, 12, 0, 0, 7); g.fill();
+  }
+
+  if (sim.weather === 'rain') paintWetSheen(g, top, rh);
+  drawSensor(g, top, rh);
+}
+
+//—— City dynamic layer: live signal lamps over the static housings ——
+const LAMP_IDX = { red: 0, yellow: 1, green: 2 };
+const LAMP_COLS = ['#ff5148', '#ffd23e', '#46e07c'];
+const LAMP_GLOWS = ['rgba(255,81,72,.28)', 'rgba(255,210,62,.28)', 'rgba(70,224,124,.28)'];
+
+function drawCityScene() {
+  const cells = cfg().lightCells, sy = signalHeadY();
+  for (let i = 0; i < cells.length; i++) {
+    const k = LAMP_IDX[lightState(i)];
+    const lx = signalHeadX(cells[i]) + 5.5, ly = sy + 5.5 + k * 9;
+    ctx.fillStyle = LAMP_GLOWS[k];                     // glow, ramp-meter style
+    ctx.beginPath(); ctx.arc(lx, ly, 6.5, 0, 7); ctx.fill();
+    ctx.fillStyle = LAMP_COLS[k];
+    ctx.beginPath(); ctx.arc(lx, ly, 3.4, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.5)';            // hot core
+    ctx.beginPath(); ctx.arc(lx - 0.9, ly - 0.9, 1.1, 0, 7); ctx.fill();
+  }
+}
+
+function drawSensor(g, top, rh) {
   const x = SENSOR_CELL * cw();
-  ctx.strokeStyle = 'rgba(77,163,255,.35)'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
-  ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, top + rh); ctx.stroke();
-  ctx.setLineDash([]);
+  g.strokeStyle = 'rgba(77,163,255,.35)'; g.lineWidth = 1; g.setLineDash([4, 4]);
+  g.beginPath(); g.moveTo(x, top); g.lineTo(x, top + rh); g.stroke();
+  g.setLineDash([]);
 }
 
-//—— Vehicles: profile-tinted rectangles, lerped between ticks ——
+//—— Vehicles: shadowed, lit bodies (cab+trailer trucks), lerped between ticks ——
+// Cars travel left→right: front/headlights at x+len, rear/taillights at x.
+// car.color is the profile-coded paint and stays the dominant read; fine
+// details are gated on length so vehicles degrade to clean silhouettes when
+// the road is dense (cw() can drop well below 6 px). No save/restore and no
+// per-frame allocations in the loop — plain fills only.
 function drawCars(a) {
   const top = roadTop(), c = cw();
+  const blink = Math.floor(performance.now() / 400) % 2 === 0;
   for (const car of sim.cars) {
     const pos = lerpPos(car, a);
     const laneF = car.prevLane + (car.lane - car.prevLane) * a;
     const x = pos * c;
     const y = top + laneF * LANE_H + LANE_H / 2;
-    const len = car.isTruck ? c * 1.15 : c * 0.85;
-    const h = car.isTruck ? LANE_H * 0.62 : LANE_H * 0.46;
-    ctx.fillStyle = car.color;
-    ctx.fillRect(x, y - h / 2, len, h);
-    if (car.braking) { ctx.fillStyle = '#ff3b30'; ctx.fillRect(x, y - h / 2, 1.6, h); }
-    if (car.exiting) { // right-turn indicator for exiting cars
-      ctx.fillStyle = '#ffb02e'; ctx.fillRect(x + len - 2, y + h / 2 - 2, 2, 2);
-    }
+    if (car.isTruck) drawTruck(car, x, y, c * 1.15, blink);
+    else drawCar(car, x, y, c * 0.85, blink);
   }
 }
 
-//—— Weather overlays ——
+// Rear (taillights / brake glow) + front (headlights) + exit indicators,
+// shared by cars and trucks. yt/h bound the body the lights attach to.
+function drawVehicleLights(car, x, len, yt, h, blink) {
+  if (car.braking) {
+    ctx.fillStyle = 'rgba(255,59,48,.30)';             // brake-light glow
+    ctx.fillRect(x - 1.8, yt - 0.5, 2.6, h + 1);
+    ctx.fillStyle = '#ff3b30';
+  } else ctx.fillStyle = '#a63b30';
+  ctx.fillRect(x, yt + 0.9, 1.3, 1.8);                 // taillights
+  ctx.fillRect(x, yt + h - 2.7, 1.3, 1.8);
+  ctx.fillStyle = '#ffe9ad';                           // headlights
+  ctx.fillRect(x + len - 1.4, yt + 0.9, 1.4, 1.7);
+  ctx.fillRect(x + len - 1.4, yt + h - 2.6, 1.4, 1.7);
+  if (car.exiting && blink) {                          // right-turn indicators
+    ctx.fillStyle = '#ffb02e';
+    ctx.fillRect(x + len - 1.6, yt + h - 1.5, 1.6, 1.6);
+    ctx.fillRect(x, yt + h - 1.5, 1.6, 1.6);
+  }
+}
+
+function drawCar(car, x, y, len, blink) {
+  const h = LANE_H * 0.46, yt = y - h / 2;
+  ctx.fillStyle = 'rgba(0,0,0,.30)';                   // soft drop shadow
+  rr(ctx, x + 0.6, yt + 1.8, len, h, 2.5);
+  if (len > 4) {                                       // wheels at both axles
+    ctx.fillStyle = '#14151a';
+    const ww = Math.max(1.4, len * 0.18);
+    ctx.fillRect(x + len * 0.10, yt + h - 1.2, ww, 2.8);
+    ctx.fillRect(x + len * 0.72, yt + h - 1.2, ww, 2.8);
+  }
+  ctx.fillStyle = car.color;                           // body
+  rr(ctx, x, yt, len, h, 2.5);
+  if (len > 5) {                                       // glass cabin, set forward
+    ctx.fillStyle = 'rgba(15,23,38,.78)';
+    rr(ctx, x + len * 0.42, yt + 1.1, len * 0.34, h - 2.2, 1.5);
+  }
+  if (len > 3) {                                       // roof highlight stripe
+    ctx.fillStyle = 'rgba(255,255,255,.20)';
+    ctx.fillRect(x + 1, yt + 1, Math.max(1, len * 0.38), 1.3);
+  }
+  drawVehicleLights(car, x, len, yt, h, blink);
+}
+
+function drawTruck(car, x, y, len, blink) {
+  const h = LANE_H * 0.62, yt = y - h / 2;
+  ctx.fillStyle = 'rgba(0,0,0,.30)';                   // soft drop shadow
+  rr(ctx, x + 0.6, yt + 1.8, len, h, 2);
+  if (len < 6) {                                       // too small for cab/trailer
+    ctx.fillStyle = car.color;
+    rr(ctx, x, yt, len, h, 1.5);
+    drawVehicleLights(car, x, len, yt, h, blink);
+    return;
+  }
+  const cabLen = Math.max(2.4, len * 0.24);
+  const trLen = len - cabLen - 1.2;                    // visible cab/trailer gap
+  ctx.fillStyle = '#14151a';                           // tandem rear + cab axles
+  ctx.fillRect(x + 0.8, yt + h - 1.2, 1.8, 3);
+  ctx.fillRect(x + 3.2, yt + h - 1.2, 1.8, 3);
+  ctx.fillRect(x + trLen + 1.6, yt + h - 1.2, 1.8, 3);
+  ctx.fillStyle = car.color;                           // boxy trailer…
+  rr(ctx, x, yt, trLen, h, 1.5);
+  ctx.fillStyle = 'rgba(255,255,255,.30)';             // …lightened / desaturated
+  rr(ctx, x, yt, trLen, h, 1.5);
+  ctx.strokeStyle = 'rgba(20,22,30,.55)'; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, yt + 0.5, trLen - 1, h - 1); // thin trailer outline
+  ctx.fillStyle = car.color;                           // cab, slightly lower roof
+  rr(ctx, x + trLen + 1.2, yt + h * 0.08, cabLen, h * 0.84, 2);
+  if (len > 9) {                                       // cab windshield band
+    ctx.fillStyle = 'rgba(15,23,38,.8)';
+    ctx.fillRect(x + trLen + 1.2 + cabLen * 0.52, yt + h * 0.16,
+                 Math.max(1, cabLen * 0.3), h * 0.66);
+  }
+  drawVehicleLights(car, x, len, yt, h, blink);
+}
+
+//—— Weather overlays (wet-road sheen lives in the static layer) ——
 function drawWeatherOverlay() {
   if (sim.weather === 'rain') {
-    ctx.strokeStyle = 'rgba(160,190,230,.30)'; ctx.lineWidth = 1;
+    ctx.fillStyle = 'rgba(38,52,82,.13)';              // dim blue storm cast
+    ctx.fillRect(0, 0, W, H);
     const t = performance.now() / 4;
-    ctx.beginPath();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(165,193,235,.30)';         // far layer: short streaks,
+    ctx.beginPath();                                   // per-streak slant variance
     for (let i = 0; i < 70; i++) {
-      const x = (i * 137 + t) % (W + 40) - 20;
+      const x = (i * 137 + t * (0.9 + (i % 3) * 0.1)) % (W + 40) - 20;
       const y = (i * 89 + t * 1.6) % H;
-      ctx.moveTo(x, y); ctx.lineTo(x - 3, y + 9);
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 2 - (i % 5) * 0.7, y + 7 + (i % 4) * 2);
     }
     ctx.stroke();
-    ctx.fillStyle = 'rgba(40,55,80,.12)'; ctx.fillRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(200,222,250,.38)';         // near layer: sparser,
+    ctx.beginPath();                                   // longer, faster
+    for (let i = 0; i < 22; i++) {
+      const x = (i * 211 + t * 1.5) % (W + 40) - 20;
+      const y = (i * 127 + t * 2.4) % H;
+      ctx.moveTo(x, y); ctx.lineTo(x - 4.5 - (i % 3), y + 13);
+    }
+    ctx.stroke();
   } else if (sim.weather === 'fog') {
-    ctx.fillStyle = 'rgba(205,210,220,.34)'; ctx.fillRect(0, 0, W, H);
+    if (fogGrad) {                                     // thin over the road,
+      ctx.fillStyle = fogGrad;                         // thick at the edges
+      ctx.fillRect(0, 0, W, H);
+    }
+    const t = performance.now() / 1000;                // slow-drifting banks
+    ctx.fillStyle = 'rgba(206,213,224,.15)';
+    for (let i = 0; i < 5; i++) {
+      const span = W * (0.55 + (i % 3) * 0.18);
+      const x = ((t * (6 + i * 2.4) + i * 320) % (W + span)) - span / 2;
+      ctx.beginPath();
+      ctx.ellipse(x, H * (0.10 + i * 0.19), span / 2, 14 + (i % 2) * 8, 0, 0, 7);
+      ctx.fill();
+    }
   }
 }
 
 //──────────────────────────── UI wiring ────────────────────────────
 function setDisabled(id, off) { $(id).classList.toggle('disabled', off); }
 
+const ICON_PAUSE = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">' +
+  '<rect x="3" y="2.5" width="3.5" height="11" rx="1.2"/><rect x="9.5" y="2.5" width="3.5" height="11" rx="1.2"/></svg>';
+const ICON_PLAY = '<svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true">' +
+  '<path d="M5 3.2a1 1 0 0 1 1.53-.85l7 4.3a1 1 0 0 1 0 1.7l-7 4.3A1 1 0 0 1 5 11.8z"/></svg>';
+
+// Paint a slider's filled-track portion via the --p custom property
+// (the track background is a linear-gradient split at --p).
+function paintRange(el) {
+  const min = +el.min || 0, max = +el.max || 100;
+  const p = max > min ? (el.value - min) / (max - min) * 100 : 0;
+  el.style.setProperty('--p', p + '%');
+}
+function paintAllRanges() {
+  document.querySelectorAll('input[type=range]').forEach(paintRange);
+}
+// Brief highlight on the value pill belonging to a slider.
+function flashVal(el) {
+  const wrap = el.closest('.ctl');
+  const v = wrap && wrap.querySelector('.val');
+  if (!v) return;
+  v.classList.remove('bump'); void v.offsetWidth; v.classList.add('bump');
+}
+// Pause button + header status chip reflect the run state.
+function updatePauseUI() {
+  const b = $('btnPause');
+  b.classList.toggle('paused', sim.paused);
+  b.setAttribute('aria-pressed', String(sim.paused));
+  b.innerHTML = (sim.paused ? ICON_PLAY + '<span>Play</span>' : ICON_PAUSE + '<span>Pause</span>');
+  $('statusChip').classList.toggle('paused', sim.paused);
+  $('statusState').textContent = sim.paused ? 'Paused' : 'Live';
+}
+
 // Sync control availability/ranges to the active scenario.
 function syncControls() {
   const s = cfg();
   $('scenarioDesc').textContent = s.desc;
+  $('statusScenario').textContent = s.label;
 
   const sp = $('speed');
   sp.min = s.speedRange[0]; sp.max = s.speedRange[1]; sp.step = s.speedStep;
@@ -954,6 +1858,9 @@ function updateLabels() {
   $('pasVal').textContent = sim.pctPas + '%';
   $('meterRateVal').textContent = sim.meterInterval + ' s';
   $('cycleVal').textContent = sim.cycleLen + ' s';
+  // Repaint every slider's filled track (covers programmatic value/min/max
+  // rewrites too, e.g. syncControls retargeting the speed slider).
+  paintAllRanges();
 }
 
 function bindUI() {
@@ -963,9 +1870,10 @@ function bindUI() {
   $('cars').addEventListener('input', e => { sim.targetCars = +e.target.value; updateLabels(); });
   $('speed').addEventListener('input', e => { sim.speedMph = +e.target.value; updateLabels(); });
   $('lanes').addEventListener('change', e => { sim.lanes = +e.target.value; updateLabels(); resetSim(); });
-  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; updateLabels(); });
-  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; updateLabels(); });
-  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; updateLabels(); });
+  // Mix sliders re-roll the existing fleet so the change is visible at once.
+  $('trucks').addEventListener('input', e => { sim.pctTrucks = +e.target.value; retuneFleet(); updateLabels(); });
+  $('pctAgg').addEventListener('input', e => { sim.pctAgg = +e.target.value; retuneFleet(); updateLabels(); });
+  $('pctPas').addEventListener('input', e => { sim.pctPas = +e.target.value; retuneFleet(); updateLabels(); });
   $('meterOn').addEventListener('change', e => { sim.meterOn = e.target.checked; sim.meterTimer = 0; });
   $('meterRate').addEventListener('input', e => { sim.meterInterval = +e.target.value; updateLabels(); });
   $('mergeShape').addEventListener('change', e => { sim.mergeShape = e.target.value; resetSim(); });
@@ -976,9 +1884,17 @@ function bindUI() {
 
   $('btnPause').addEventListener('click', () => {
     sim.paused = !sim.paused;
-    $('btnPause').textContent = sim.paused ? '▶ Play' : '⏸ Pause';
+    updatePauseUI();
   });
   $('btnReset').addEventListener('click', resetSim);
+
+  // Micro-interactions shared by every range input: filled-track repaint
+  // and a brief highlight of the value pill while scrubbing.
+  document.querySelectorAll('input[type=range]').forEach(r => {
+    r.addEventListener('input', () => { paintRange(r); flashVal(r); });
+  });
+
+  updatePauseUI();
 }
 
 //──────────────────────────── Loops ────────────────────────────
