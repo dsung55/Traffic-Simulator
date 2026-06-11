@@ -561,10 +561,10 @@ function rollProfile(isTruck) {
 }
 function carColor(profName, isTruck) {
   const h = (a, b) => a + Math.random() * (b - a);
-  if (isTruck) return `hsl(${h(20, 50)},${h(8, 18)}%,${h(60, 75)}%)`;
-  if (profName === 'aggressive') return `hsl(${h(0, 14)},${h(65, 85)}%,${h(50, 62)}%)`;
-  if (profName === 'passive')    return `hsl(${h(205, 230)},${h(32, 50)}%,${h(55, 68)}%)`;
-  return `hsl(${h(0, 360)},${h(8, 22)}%,${h(55, 80)}%)`;
+  if (isTruck) return `hsl(${h(22, 48)},${h(12, 22)}%,${h(58, 74)}%)`;       // tan rigs
+  if (profName === 'aggressive') return `hsl(${(h(-8, 14) + 360) % 360},${h(68, 88)}%,${h(48, 60)}%)`; // hot red
+  if (profName === 'passive')    return `hsl(${h(205, 232)},${h(38, 56)}%,${h(54, 68)}%)`; // cool blue
+  return `hsl(${h(0, 360)},${h(6, 20)}%,${h(54, 80)}%)`;                     // neutral
 }
 // Create a car. Profile and truck status persist until the % sliders change,
 // at which point retuneFleet() may reassign them to match the new mix.
@@ -1661,6 +1661,26 @@ function drawSensor(g, top, rh) {
 // details are gated on length so vehicles degrade to clean silhouettes when
 // the road is dense (cw() can drop well below 6 px). No save/restore and no
 // per-frame allocations in the loop — plain fills only.
+
+// Top-down car-body silhouette: rounded trunk at the rear (x), a longer,
+// slightly tapered/rounder hood at the front (x+w). Fills the current
+// fillStyle. No allocations — straight path ops on the shared ctx.
+function carBody(g, x, y, w, h, r) {
+  r = Math.min(r, h / 2, w / 2);
+  if (r <= 0.5) { g.fillRect(x, y, w, h); return; }
+  const fr = Math.min(r * 1.6, w * 0.5, h / 2);          // bigger front round-off
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.lineTo(x + w - fr, y);
+  g.arcTo(x + w, y, x + w, y + h / 2, fr);               // rounded hood (front)
+  g.arcTo(x + w, y + h, x + w - fr, y + h, fr);
+  g.lineTo(x + r, y + h);
+  g.arcTo(x, y + h, x, y + h / 2, r);                    // rounded trunk (rear)
+  g.arcTo(x, y, x + r, y, r);
+  g.closePath();
+  g.fill();
+}
+
 function drawCars(a) {
   const top = roadTop(), c = cw();
   const blink = Math.floor(performance.now() / 400) % 2 === 0;
@@ -1697,22 +1717,37 @@ function drawVehicleLights(car, x, len, yt, h, blink) {
 function drawCar(car, x, y, len, blink) {
   const h = LANE_H * 0.46, yt = y - h / 2;
   ctx.fillStyle = 'rgba(0,0,0,.30)';                   // soft drop shadow
-  rr(ctx, x + 0.6, yt + 1.8, len, h, 2.5);
-  if (len > 4) {                                       // wheels at both axles
-    ctx.fillStyle = '#14151a';
-    const ww = Math.max(1.4, len * 0.18);
-    ctx.fillRect(x + len * 0.10, yt + h - 1.2, ww, 2.8);
-    ctx.fillRect(x + len * 0.72, yt + h - 1.2, ww, 2.8);
+  carBody(ctx, x + 0.6, yt + 1.8, len, h, 2.6);
+  if (len > 4) {                                       // tyre tops at 4 corners
+    ctx.fillStyle = '#111217';
+    const ww = Math.max(1.4, len * 0.17), wt = 1.5;
+    ctx.fillRect(x + len * 0.12, yt - 0.5, ww, wt);    // rear axle
+    ctx.fillRect(x + len * 0.12, yt + h - 1.0, ww, wt);
+    ctx.fillRect(x + len * 0.66, yt - 0.5, ww, wt);    // front axle
+    ctx.fillRect(x + len * 0.66, yt + h - 1.0, ww, wt);
   }
-  ctx.fillStyle = car.color;                           // body
-  rr(ctx, x, yt, len, h, 2.5);
-  if (len > 5) {                                       // glass cabin, set forward
-    ctx.fillStyle = 'rgba(15,23,38,.78)';
-    rr(ctx, x + len * 0.42, yt + 1.1, len * 0.34, h - 2.2, 1.5);
+  ctx.fillStyle = car.color;                           // car-shaped body
+  carBody(ctx, x, yt, len, h, 2.6);
+  if (len > 6) {                                       // mirror nubs near front
+    ctx.fillStyle = car.color;
+    ctx.fillRect(x + len * 0.60, yt - 0.7, len * 0.07, 0.9);
+    ctx.fillRect(x + len * 0.60, yt + h - 0.2, len * 0.07, 0.9);
   }
-  if (len > 3) {                                       // roof highlight stripe
+  if (len > 5) {                                       // greenhouse: roof between
+    const gx = x + len * 0.30, gw = len * 0.46;        // windshield + rear window
+    const gy = yt + 1.0, gh = h - 2.0;
+    ctx.fillStyle = 'rgba(12,20,34,.82)';              // rear window (toward rear)
+    rr(ctx, gx, gy, gw * 0.34, gh, 1.2);
+    ctx.fillStyle = 'rgba(15,24,40,.82)';              // windshield (toward front)
+    rr(ctx, gx + gw * 0.56, gy, gw * 0.44, gh, 1.4);
+    ctx.fillStyle = car.color;                         // roof pillar between glass
+    ctx.fillRect(gx + gw * 0.34, gy, gw * 0.22, gh);
+    ctx.fillStyle = 'rgba(255,255,255,.18)';           // cool glass reflection
+    ctx.fillRect(gx + gw * 0.58, gy + 0.6, gw * 0.32, 0.9);
+  }
+  if (len > 3) {                                       // centreline sheen
     ctx.fillStyle = 'rgba(255,255,255,.20)';
-    ctx.fillRect(x + 1, yt + 1, Math.max(1, len * 0.38), 1.3);
+    ctx.fillRect(x + 2, yt + h * 0.5 - 0.7, Math.max(1, len - 4), 1.4);
   }
   drawVehicleLights(car, x, len, yt, h, blink);
 }
@@ -1727,24 +1762,42 @@ function drawTruck(car, x, y, len, blink) {
     drawVehicleLights(car, x, len, yt, h, blink);
     return;
   }
-  const cabLen = Math.max(2.4, len * 0.24);
-  const trLen = len - cabLen - 1.2;                    // visible cab/trailer gap
-  ctx.fillStyle = '#14151a';                           // tandem rear + cab axles
-  ctx.fillRect(x + 0.8, yt + h - 1.2, 1.8, 3);
-  ctx.fillRect(x + 3.2, yt + h - 1.2, 1.8, 3);
-  ctx.fillRect(x + trLen + 1.6, yt + h - 1.2, 1.8, 3);
+  const cabLen = Math.max(2.6, len * 0.26);
+  const gap = 1.2;
+  const trLen = len - cabLen - gap;                    // visible cab/trailer gap
+  const cabX = x + trLen + gap;
+  if (len > 7) {                                       // tandem trailer + cab tyres
+    ctx.fillStyle = '#111217';
+    const tw = 1.8;
+    ctx.fillRect(x + 0.8, yt - 0.5, tw, 1.4);          // trailer tandem, both sides
+    ctx.fillRect(x + 0.8, yt + h - 0.9, tw, 1.4);
+    ctx.fillRect(x + 3.2, yt - 0.5, tw, 1.4);
+    ctx.fillRect(x + 3.2, yt + h - 0.9, tw, 1.4);
+    ctx.fillRect(cabX + cabLen * 0.45, yt - 0.5, tw, 1.4);   // cab drive axle
+    ctx.fillRect(cabX + cabLen * 0.45, yt + h - 0.9, tw, 1.4);
+  }
   ctx.fillStyle = car.color;                           // boxy trailer…
   rr(ctx, x, yt, trLen, h, 1.5);
-  ctx.fillStyle = 'rgba(255,255,255,.30)';             // …lightened / desaturated
+  ctx.fillStyle = 'rgba(255,255,255,.26)';             // …lightened / desaturated
   rr(ctx, x, yt, trLen, h, 1.5);
-  ctx.strokeStyle = 'rgba(20,22,30,.55)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(20,22,30,.50)'; ctx.lineWidth = 1;
   ctx.strokeRect(x + 0.5, yt + 0.5, trLen - 1, h - 1); // thin trailer outline
-  ctx.fillStyle = car.color;                           // cab, slightly lower roof
-  rr(ctx, x + trLen + 1.2, yt + h * 0.08, cabLen, h * 0.84, 2);
-  if (len > 9) {                                       // cab windshield band
-    ctx.fillStyle = 'rgba(15,23,38,.8)';
-    ctx.fillRect(x + trLen + 1.2 + cabLen * 0.52, yt + h * 0.16,
-                 Math.max(1, cabLen * 0.3), h * 0.66);
+  if (len > 10) {                                      // roof rib lines
+    ctx.strokeStyle = 'rgba(20,22,30,.22)'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let rx = x + trLen * 0.3; rx < x + trLen - 1.5; rx += trLen * 0.22) {
+      ctx.moveTo(rx, yt + 1.5); ctx.lineTo(rx, yt + h - 1.5);
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = car.color;                           // cab, slightly inset roof
+  rr(ctx, cabX, yt + h * 0.06, cabLen, h * 0.88, 2);
+  if (len > 9) {                                       // wraparound cab windshield
+    ctx.fillStyle = 'rgba(13,21,36,.82)';
+    rr(ctx, cabX + cabLen * 0.5, yt + h * 0.14,
+       Math.max(1.2, cabLen * 0.34), h * 0.72, 1.2);
+    ctx.fillStyle = 'rgba(255,255,255,.16)';           // glass glint
+    ctx.fillRect(cabX + cabLen * 0.56, yt + h * 0.2, cabLen * 0.22, 0.9);
   }
   drawVehicleLights(car, x, len, yt, h, blink);
 }
