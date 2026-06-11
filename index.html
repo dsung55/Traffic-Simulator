@@ -401,7 +401,6 @@
         <label for="scenario">Road layout</label>
         <select id="scenario">
           <option value="highway">Highway with On-Ramp</option>
-          <option value="interchange">Highway Interchange</option>
           <option value="city">City Arterial (Lights)</option>
         </select>
         <p id="scenarioDesc"></p>
@@ -455,6 +454,11 @@
         <label class="toggle"><input type="checkbox" id="meterOn"><span class="tg"></span>Ramp meter</label>
         <label for="meterRate">Release: 1 car / <span class="val" id="meterRateVal"></span></label>
         <input type="range" id="meterRate" min="4" max="30" value="8">
+      </div>
+      <div class="ctl" id="cExit">
+        <label class="toggle"><input type="checkbox" id="exitRamp"><span class="tg"></span>Exit ramp (off-ramp)</label>
+        <label for="exitPct">Drivers taking the exit <span class="val" id="exitPctVal"></span></label>
+        <input type="range" id="exitPct" min="5" max="50" value="20">
       </div>
       <div class="ctl" id="cIncident">
         <label class="toggle"><input type="checkbox" id="incident"><span class="tg"></span>Incident (lane closure)</label>
@@ -570,18 +574,10 @@ const MERGE_MARGIN = 1.0;     // min bumper gap (cells) required ahead & behind 
 const SCENARIOS = {
   highway: {
     label: 'Highway with On-Ramp',
-    desc: 'Open mainline: traffic enters at the left edge and exits at the right. A metered on-ramp feeds a second stream.',
+    desc: 'Open mainline: traffic enters at the left edge and exits at the right. A metered on-ramp feeds a second stream; an optional exit ramp lets a share of drivers peel off early.',
     laneOptions: [2, 3, 4], defaultLanes: 3,
     speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
-    hasRamp: true, onRampCell: 59, hasOffRamp: false,
-    hasIncident: true, lightCells: null, style: 'highway',
-  },
-  interchange: {
-    label: 'Highway Interchange',
-    desc: 'Adds an off-ramp before the on-ramp. Exiting cars weave right and peel off; the rest flow on to the right edge.',
-    laneOptions: [2, 3, 4], defaultLanes: 3,
-    speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
-    hasRamp: true, onRampCell: 59, hasOffRamp: true, offRampCell: 25,
+    hasRamp: true, onRampCell: 59, offRampCell: 25,
     hasIncident: true, lightCells: null, style: 'highway',
   },
   city: {
@@ -589,7 +585,7 @@ const SCENARIOS = {
     desc: 'Arterial street with signals. Cars enter at the left edge, stop-and-go through the lights, and exit at the right.',
     laneOptions: [1, 2], defaultLanes: 2,
     speedRange: [25, 45], speedStep: 5, defaultSpeed: 35,
-    hasRamp: false, hasOffRamp: false,
+    hasRamp: false,
     hasIncident: false, lightCells: [21, 46, 71], style: 'city',
   },
 };
@@ -603,6 +599,7 @@ const sim = {
   pctTrucks: 10, pctAgg: 15, pctPas: 15,
   meterOn: false, meterInterval: 8, mergeShape: 'taper',
   incident: false,
+  exitRamp: false, exitPct: 20,  // off-ramp toggle + mean share of drivers exiting
   weather: 'clear',
   cycleLen: 60, greenWave: false,
   paused: false,
@@ -622,6 +619,8 @@ const sim = {
 };
 
 function cfg() { return SCENARIOS[sim.scenario]; }
+// Off-ramp is a user toggle on scenarios whose geometry supports one.
+function offRampActive() { return sim.exitRamp && cfg().offRampCell !== undefined; }
 function rampLaneIdx() { return sim.lanes; }                  // accel lane sits below mainline
 function rampLen() { return MERGE_SHAPES[sim.mergeShape].len; }
 function rampStart() { return cfg().onRampCell; }
@@ -710,7 +709,9 @@ function makeCar(lane, cell, v) {
   const prof = isTruck ? Object.assign({}, base, TRUCK_OVERRIDE) : base;
   // Interchange: each car gets a permanent random 15–30% chance of taking the
   // off-ramp; it rolls that chance once upstream of the ramp, then weaves right.
-  const exitChance = cfg().hasOffRamp ? 0.15 + Math.random() * 0.15 : 0;
+  const exitChance = offRampActive()
+    ? Math.min(0.9, (sim.exitPct / 100) * (0.75 + Math.random() * 0.5))
+    : 0;
   // Physical length in cells (small per-vehicle variance around the baselines).
   const len = isTruck ? TRUCK_LEN * (0.92 + Math.random() * 0.18)
                       : CAR_LEN * (0.93 + Math.random() * 0.16);
@@ -733,16 +734,22 @@ function makeCar(lane, cell, v) {
 }
 
 //──────────────────────────── Per-lane ordering & gap helpers ────────────────────────────
-// The world is OPEN (cars enter left at cell 0, exit right near cell N) but we
-// still scan with ring-wrap awareness for robustness. We keep no occupancy grid;
-// spatial queries are O(n) scans over sim.cars (≤ ~160 cars), which is plenty
-// fast. A car occupies [cell, cell+car.len) along travel; the bumper-to-bumper
-// gap to a leader at lead.cell is (lead.cell - car.cell - car.len), measured on
-// the forward (increasing-cell) direction with ring wrap. A car mid lane change
-// occupies TWO lanes (car.lane plus car.lane2) until it is mostly across, so
-// traffic in both lanes follows it and nobody clips through a straddling body.
+// The world is OPEN (cars enter left at cell 0, exit right near cell N). All
+// car-following / gap queries use PLAIN signed distance — never ring wrap — so
+// the visible strip behaves like a slice of an infinite road: a car near the
+// right edge sees empty road ahead (it is about to drive off-screen), and a car
+// spawning at the left edge never registers as the "leader" of one about to
+// exit on the right. Ring-wrapped fwd() survives only for tick bookkeeping
+// (sensor/landmark crossings and right-edge despawn detection). We keep no
+// occupancy grid; spatial queries are O(n) scans over sim.cars (≤ ~160 cars),
+// which is plenty fast. A car occupies [cell, cell+car.len) along travel; the
+// bumper-to-bumper gap to a leader at lead.cell is (lead.cell - car.cell -
+// car.len). A car mid lane change occupies TWO lanes (car.lane plus car.lane2)
+// until it is mostly across, so traffic in both lanes follows it and nobody
+// clips through a straddling body.
 
-// Forward distance from a to b in cells, on the ring [0,N).
+// Forward distance from a to b in cells, on the ring [0,N). ONLY for crossing
+// detection in the post-move scan — never for gap/leader queries (see above).
 function fwd(a, b) { let d = b - a; while (d < 0) d += N; while (d >= N) d -= N; return d; }
 
 // Does `o` currently occupy `lane` (primary lane, or the lane it is leaving
@@ -757,7 +764,7 @@ function leaderInLane(car, lane, maxScan) {
   let bestD = Infinity, lead = null;
   for (const o of sim.cars) {
     if (o === car || !occupiesLane(o, lane)) continue;
-    const d = fwd(car.cell, o.cell);
+    const d = o.cell - car.cell;          // open road: no wrap past the edges
     // d === 0 means another car sits on the exact same cell (a would-be overlap,
     // e.g. evaluating a merge onto an occupant). Count it as the nearest leader
     // so the resulting negative gap makes MOBIL/IDM reject/avoid the overlap.
@@ -773,7 +780,7 @@ function followerInLane(car, lane, maxScan) {
   let bestD = Infinity, foll = null;
   for (const o of sim.cars) {
     if (o === car || !occupiesLane(o, lane)) continue;
-    const d = fwd(o.cell, car.cell);   // distance from o forward to car
+    const d = car.cell - o.cell;       // open road: no wrap past the edges
     if (d > 0 && d < bestD && d <= maxScan) { bestD = d; foll = o; }
   }
   if (!foll) return { gap: maxScan, foll: null };
@@ -800,15 +807,16 @@ function virtualObstacle(car, lane, skipWall) {
     for (let i = 0; i < lights.length; i++) {
       const st = lightState(i);
       if (st === 'green') continue;
-      const d = fwd(car.cell, lights[i]);   // distance to the stop line
+      const d = lights[i] - car.cell;       // open road: a passed light is behind us
+      if (d < 0) continue;
       // Yellow: only stop if we cannot comfortably clear it (still > ~1 cell away).
       if (st === 'yellow' && d < Math.max(1, car.v * 0.6)) continue;
       if (d < best) best = d;
     }
   }
   if (sim.incident && cfg().hasIncident && lane === sim.lanes - 1) {
-    const d = fwd(car.cell, INCIDENT_CELL);
-    if (d < best) best = d;
+    const d = INCIDENT_CELL - car.cell;
+    if (d >= 0 && d < best) best = d;
   }
   if (!skipWall && cfg().hasRamp && lane === rampLaneIdx()) {
     // Wall at the end of the acceleration lane: the car must merge before it.
@@ -955,13 +963,13 @@ function lcUrgency(car) {
     const d = rampEnd() - car.cell;          // distance to the end-of-ramp wall
     u = Math.max(u, d < 2 ? 0.75 : d < 4 ? 0.55 : d < 7 ? 0.35 : 0.15);
   }
-  if (car.exiting && cfg().hasOffRamp && car.lane < sim.lanes - 1) {
-    const d = fwd(car.cell, cfg().offRampCell);
-    if (d < 5) u = Math.max(u, 0.6); else if (d < 12) u = Math.max(u, 0.35);
+  if (car.exiting && offRampActive() && car.lane < sim.lanes - 1) {
+    const d = cfg().offRampCell - car.cell;
+    if (d >= 0) { if (d < 5) u = Math.max(u, 0.6); else if (d < 12) u = Math.max(u, 0.35); }
   }
   if (sim.incident && cfg().hasIncident && car.lane === sim.lanes - 1) {
-    const d = fwd(car.cell, INCIDENT_CELL);
-    if (d < 8) u = Math.max(u, 0.55);        // creeping out of the blocked lane
+    const d = INCIDENT_CELL - car.cell;
+    if (d >= 0 && d < 8) u = Math.max(u, 0.55); // creeping out of the blocked lane
   }
   return u;
 }
@@ -1033,7 +1041,7 @@ function laneChangeStep() {
   const reserved = [];
   const slotFree = (lane, cell, len) => reserved.every(r =>
     r.lane !== lane ||
-    Math.min(fwd(r.cell, cell), fwd(cell, r.cell)) > (r.len + len) / 2 + MERGE_MARGIN + 0.5);
+    Math.abs(r.cell - cell) > (r.len + len) / 2 + MERGE_MARGIN + 0.5);
 
   for (const car of sim.cars) { car.yieldFor = null; car.closeGap = false; }
 
@@ -1182,7 +1190,7 @@ function speedAndMoveStep() {
         // only while the merger is genuinely ahead and we'd otherwise keep
         // closing on it (never brake to a standstill for a blinker).
         const yf = car.yieldFor;
-        const g = fwd(car.cell, yf.cell) - (car.len || CAR_LEN);
+        const g = (yf.cell - car.cell) - (car.len || CAR_LEN);
         if (g > 0.1 && car.v > yf.v - 0.2) {
           const ay = idmAccel(car, Math.max(0.3, g - 1.0), yf.v);
           if (ay < a2) a2 = Math.max(ay, -0.9);
@@ -1225,17 +1233,22 @@ function speedAndMoveStep() {
     const dSensor = fwd(prev, SENSOR_CELL);
     if (movedDist > 0 && dSensor > 0 && dSensor <= movedDist) sim.evThroughput.push(sim.time);
 
-    if (cfg().hasOffRamp) {
+    if (offRampActive()) {
       // Commit/re-roll the exit decision upstream of the ramp.
       const dDecide = fwd(prev, EXIT_DECIDE_CELL);
       if (!car.exitDecided && movedDist >= dDecide && dDecide >= 0) {
         car.exiting = Math.random() < car.exitChance;
         car.exitDecided = true;
       }
-      // Off-ramp departure: an exiting car in the rightmost lane peels off.
+      // Off-ramp departure: an exiting car in the rightmost lane peels off. One
+      // that crosses the gore point still stuck in an inner lane has MISSED the
+      // exit — it gives up (blinker off) and drives on like everyone else.
       const dExit = fwd(prev, cfg().offRampCell);
       if (car.exiting && movedDist >= dExit && dExit >= 0 && !wrapped) {
-        if (car.lane === sim.lanes - 1) { remove.add(i); sim.rampQueue++; continue; }
+        if (car.lane === sim.lanes - 1 && car.lane2 == null) {
+          remove.add(i); sim.rampQueue++; continue;
+        }
+        car.exiting = false;
       }
     }
 
@@ -1289,10 +1302,9 @@ function spawnStep() {
 function laneEntryFree(lane, cell, minGap) {
   for (const o of sim.cars) {
     if (!occupiesLane(o, lane)) continue;
-    const ahead = fwd(cell, o.cell);          // o is ahead of the entry
-    const behind = fwd(o.cell, cell);         // o is behind the entry
-    if (ahead < minGap) return false;         // room for the newcomer's body + gap
-    if (behind < o.len + 0.4) return false;   // something straddling the entry
+    const d = o.cell - cell;                  // signed: + ahead of entry, − behind
+    if (d >= 0 && d < minGap) return false;   // room for the newcomer's body + gap
+    if (d < 0 && -d < o.len + 0.4) return false; // something straddling the entry
   }
   return true;
 }
@@ -1309,10 +1321,18 @@ function spawnLeftEdge(target) {
   for (const l of lanes) {
     if (budget <= 0) break;
     if (!laneEntryFree(l, 0, 4.5)) continue;   // need breathing room (truck-sized)
-    // Entry speed: the desired free speed, capped by the gap ahead so the new
-    // car doesn't immediately overrun its leader.
     const r = leaderInLane({ lane: l, cell: 0, v: 0, len: CAR_LEN, prof: PROFILES.normal, isTruck: false, speedFactor: 1 }, l, N);
-    const car = makeCar(l, 0, Math.max(0.5, Math.min(vmaxFloat(), r.gap)));
+    const car = makeCar(l, 0, 1);
+    // Arrival speed: the visible strip is a slice of a longer road, so a car
+    // "was already driving" before it appeared — it enters at the speed the
+    // traffic ahead supports, not from a near-standstill. Clear lane ⇒ its own
+    // desired speed; leader ahead ⇒ the higher of matching the leader or the
+    // IDM-equilibrium speed the current gap sustains at its headway T.
+    const free = carV0(car);
+    const eq = r.lead
+      ? Math.max(r.leadV, (r.gap - car.prof.s0) / car.prof.T)
+      : free;
+    car.v = car.startV = Math.max(0.4, Math.min(free, eq));
     sim.cars.push(car);
     budget--;
   }
@@ -1727,7 +1747,8 @@ function buildScene() {
 function render() {
   const a = sim.paused ? 1 : Math.min(1, (performance.now() - sim.lastTickWall) / TICK_MS);
   const sig = W + '|' + H + '|' + dpr + '|' + sim.scenario + '|' + sim.lanes + '|' +
-              sim.mergeShape + '|' + sim.weather + '|' + sim.buildings.length;
+              sim.mergeShape + '|' + sim.weather + '|' + sim.exitRamp + '|' +
+              sim.buildings.length;
   if (sig !== sceneSig) { sceneSig = sig; buildScene(); }
   ctx.clearRect(0, 0, W, H);
   // World pass under the camera transform: static blit, dynamic scenery,
@@ -1853,7 +1874,7 @@ function buildHighwayStatic(g) {
 
   // ── Off-ramp (interchange): a wedge peeling off the rightmost mainline lane to
   //    the lower-right, opening at the boundary (ry) and dropping below the road.
-  if (cfg().hasOffRamp) {
+  if (offRampActive()) {
     const ox = cfg().offRampCell * c;                  // exit gore point on the boundary
     const offDrop = Math.min(LANE_H * 2.4, (H - ay) * 0.5);
     const offW = LANE_H;                               // one ramp lane wide
@@ -1896,7 +1917,7 @@ function buildHighwayStatic(g) {
   drawGuardrail(g, 0, W, top - 11);
   const railY = ay + 11;                               // rail sits below the accel lane
   const gaps = [[rsX - appRun - 10, reX + 6]];          // on-ramp + accel-lane gap
-  if (cfg().hasOffRamp) {
+  if (offRampActive()) {
     const ox = cfg().offRampCell * c;
     gaps.push([ox - LANE_H * 1.8, ox + LANE_H * 2.6]);
   }
@@ -2626,6 +2647,7 @@ function syncControls() {
 
   setDisabled('cMeter', !s.hasRamp);
   setDisabled('cMerge', !s.hasRamp);
+  setDisabled('cExit', s.offRampCell === undefined);
   setDisabled('cIncident', !s.hasIncident);
   setDisabled('cCycle', !s.lightCells);
   setDisabled('cWave', !s.lightCells);
@@ -2640,6 +2662,7 @@ function updateLabels() {
   $('aggVal').textContent = sim.pctAgg + '%';
   $('pasVal').textContent = sim.pctPas + '%';
   $('meterRateVal').textContent = sim.meterInterval + ' s';
+  $('exitPctVal').textContent = sim.exitPct + '%';
   $('cycleVal').textContent = sim.cycleLen + ' s';
   // Repaint every slider's filled track (covers programmatic value/min/max
   // rewrites too, e.g. syncControls retargeting the speed slider).
@@ -2663,6 +2686,25 @@ function bindUI() {
   $('meterOn').addEventListener('change', e => { sim.meterOn = e.target.checked; sim.meterTimer = 0; });
   $('meterRate').addEventListener('input', e => { sim.meterInterval = +e.target.value; updateLabels(); });
   $('mergeShape').addEventListener('change', e => { sim.mergeShape = e.target.value; resetSim(); });
+  // Exit ramp toggles IN PLACE (no reset): the ramp appears/disappears and the
+  // fleet adapts. On enable, cars still meaningfully upstream of the gore get
+  // an immediate exit decision so the effect shows within seconds; on disable,
+  // would-be exiters just drive on.
+  $('exitRamp').addEventListener('change', e => {
+    sim.exitRamp = e.target.checked;
+    const ox = cfg().offRampCell;
+    for (const car of sim.cars) {
+      if (sim.exitRamp && ox !== undefined && car.cell < ox - 5 &&
+          car.lane < sim.lanes) {  // accel-lane cars decide after merging
+        car.exitChance = Math.min(0.9, (sim.exitPct / 100) * (0.75 + Math.random() * 0.5));
+        car.exiting = Math.random() < car.exitChance;
+        car.exitDecided = true;
+      } else if (!sim.exitRamp) {
+        car.exiting = false;
+      }
+    }
+  });
+  $('exitPct').addEventListener('input', e => { sim.exitPct = +e.target.value; updateLabels(); });
   $('incident').addEventListener('change', e => { sim.incident = e.target.checked; });
   $('cycleLen').addEventListener('input', e => { sim.cycleLen = +e.target.value; updateLabels(); });
   $('greenWave').addEventListener('change', e => { sim.greenWave = e.target.checked; });
