@@ -493,11 +493,13 @@
 /*
  * Traffic Simulator — continuous microsimulation (IDM + MOBIL).
  *
- * Units (fixed): 1 cell = 7.5 m (one car length); 1 tick = 1 simulated second.
+ * Units (fixed): 1 cell = 7.5 m; 1 tick = 1 simulated second.
  * Positions (car.cell) and speeds (car.v, cells/second) are now FLOATS:
- *   1 cell/s = 7.5 m/s ≈ 16.8 mph.
- * Longitudinal motion is the Intelligent Driver Model (IDM); lane changes use
- * MOBIL (incentive vs. politeness, with a hard safety criterion). Each tick
+ *   1 cell/s = 7.5 m/s ≈ 16.8 mph. Vehicles have physical lengths (car.len,
+ *   ~1.5 cells for cars, ~3.75 for trucks) used by every gap computation.
+ * Longitudinal motion is the Intelligent Driver Model (IDM); lane changes are
+ * MOBIL-motivated but run a realistic phase machine (signal → wait for a safe
+ * gap, with cooperative yielding → smooth 2.6 s steer-over, abortable). Each tick
  * integrates IDM over SUBSTEPS sub-steps (dt = 1/SUBSTEPS s) for stability and
  * advances sim.time by 1 (= one simulated second). The sim advances on a fixed
  * 200 ms wall-clock interval; rendering runs at 60 fps via requestAnimationFrame
@@ -518,7 +520,12 @@ const SENSOR_CELL = 63;        // throughput sensor (old 150)
 const INCIDENT_CELL = 42;      // lane-closure obstacle (old 100)
 const EXIT_DECIDE_CELL = 9;    // where cars commit to taking the off-ramp (old 20)
 const ROAD_MILES = N * 7.5 / 1609.34;
-const CAR_LEN = 1.0;           // physical car length in cells (used for gaps)
+// Physical vehicle lengths in CELLS. Every gap/collision computation uses the
+// per-car `car.len` rolled in makeCar (small variance around these baselines);
+// the renderer draws bodies at exactly len × cw() px so visuals and physics
+// always agree. Trucks are ~2.5× a car.
+const CAR_LEN = 1.5;           // baseline car length (cells)
+const TRUCK_LEN = 3.75;        // baseline truck length (cells)
 
 const MERGE_SHAPES = {
   taper:    { len: 5 },    // standard acceleration taper (old 10)
@@ -536,18 +543,25 @@ const MERGE_SHAPES = {
 //   threshold  : MOBIL switching threshold Δa_th (cells/s²) — lower = changes eagerly
 //   biasRight  : keep-right bias a_bias (cells/s²) added to favour the right lane
 //   leftPref   : extra incentive (cells/s²) to favour moving left/faster
+//   signalTime : seconds of blinker before the lateral move may begin
+//   gapAccept  : scale on the gap a driver demands before merging (lower = bolder)
+//   patience   : seconds to keep signalling for a gap before giving up
 const PROFILES = {
   aggressive: { v0Mult: 1.06, T: 1.0, s0: 1.0, a: 2.2, b: 2.4,
-                politeness: 0.05, threshold: 0.05, biasRight: 0.05, leftPref: 0.30 },
+                politeness: 0.05, threshold: 0.05, biasRight: 0.05, leftPref: 0.30,
+                signalTime: 0.9, gapAccept: 0.70, patience: 5 },
   normal:     { v0Mult: 1.00, T: 1.5, s0: 1.4, a: 1.6, b: 2.0,
-                politeness: 0.30, threshold: 0.15, biasRight: 0.20, leftPref: 0.05 },
+                politeness: 0.30, threshold: 0.15, biasRight: 0.20, leftPref: 0.05,
+                signalTime: 1.5, gapAccept: 1.00, patience: 8 },
   passive:    { v0Mult: 0.94, T: 2.0, s0: 1.8, a: 1.1, b: 1.6,
-                politeness: 0.55, threshold: 0.25, biasRight: 0.35, leftPref: 0.00 },
+                politeness: 0.55, threshold: 0.25, biasRight: 0.35, leftPref: 0.00,
+                signalTime: 2.0, gapAccept: 1.30, patience: 11 },
 };
 // Truck overrides (merged onto whatever profile a truck draws): governed top
 // speed, longer effective body, gentle accel, larger minimum gap.
 const TRUCK_OVERRIDE = { v0Cap: 3.0, T: 1.8, s0: 2.0, a: 0.8, b: 1.6,
-                         politeness: 0.45, threshold: 0.30, biasRight: 0.40, leftPref: 0 };
+                         politeness: 0.45, threshold: 0.30, biasRight: 0.40, leftPref: 0,
+                         signalTime: 2.0, gapAccept: 1.25, patience: 12 };
 const B_SAFE = 4.0;            // MOBIL hard safety: no follower forced below −b_safe
 const MERGE_MARGIN = 1.0;     // min bumper gap (cells) required ahead & behind to commit a change
 
@@ -612,7 +626,9 @@ function rampLaneIdx() { return sim.lanes; }                  // accel lane sits
 function rampLen() { return MERGE_SHAPES[sim.mergeShape].len; }
 function rampStart() { return cfg().onRampCell; }
 function rampEnd() { return cfg().onRampCell + rampLen() - 1; } // last usable accel-lane cell
-function densityCap() { return Math.floor(sim.lanes * N * 0.55); }
+// Jam spacing per vehicle is now len (≈1.5 cells) + s0 (≈1.4), so the road
+// physically holds ~N/3 vehicles per lane; cap a little under that.
+function densityCap() { return Math.floor(sim.lanes * N * 0.30); }
 function effTarget() { return Math.min(sim.targetCars, densityCap()); }
 
 /*
@@ -695,11 +711,19 @@ function makeCar(lane, cell, v) {
   // Interchange: each car gets a permanent random 15–30% chance of taking the
   // off-ramp; it rolls that chance once upstream of the ramp, then weaves right.
   const exitChance = cfg().hasOffRamp ? 0.15 + Math.random() * 0.15 : 0;
+  // Physical length in cells (small per-vehicle variance around the baselines).
+  const len = isTruck ? TRUCK_LEN * (0.92 + Math.random() * 0.18)
+                      : CAR_LEN * (0.93 + Math.random() * 0.16);
   return {
-    id: sim.nextId++, lane, cell, v,
+    id: sim.nextId++, lane, cell, v, len,
     prevCell: cell, prevLane: lane, startV: v,
     laneCoord: lane,          // CONTINUOUS lane coordinate (renderer reads this for y)
     laneFrom: lane, laneTo: lane, laneT: 1, // lane-change animation state (laneT in [0,1])
+    lane2: null,              // secondary lane occupied while straddling the line
+    lc: null,                 // lane-change plan { target, dir, phase, t, wait, sigTime, forced, from }
+    signal: 0,                // blinker: -1 left (screen-up), +1 right (screen-down), 0 off
+    tilt: 0, prevTilt: 0,     // body yaw (rad) while steering across, lerped by the renderer
+    yieldFor: null, closeGap: false,  // per-tick cooperation flags (set in yieldPass)
     profName, prof, isTruck,
     speedFactor: rollSpeedFactor(profName),
     exitChance, exiting: Math.random() < exitChance, exitDecided: false,
@@ -712,12 +736,18 @@ function makeCar(lane, cell, v) {
 // The world is OPEN (cars enter left at cell 0, exit right near cell N) but we
 // still scan with ring-wrap awareness for robustness. We keep no occupancy grid;
 // spatial queries are O(n) scans over sim.cars (≤ ~160 cars), which is plenty
-// fast. A car occupies [cell, cell+CAR_LEN) along travel; the bumper-to-bumper
-// gap to a leader at lead.cell is (lead.cell - car.cell - CAR_LEN), measured on
-// the forward (increasing-cell) direction with ring wrap.
+// fast. A car occupies [cell, cell+car.len) along travel; the bumper-to-bumper
+// gap to a leader at lead.cell is (lead.cell - car.cell - car.len), measured on
+// the forward (increasing-cell) direction with ring wrap. A car mid lane change
+// occupies TWO lanes (car.lane plus car.lane2) until it is mostly across, so
+// traffic in both lanes follows it and nobody clips through a straddling body.
 
 // Forward distance from a to b in cells, on the ring [0,N).
 function fwd(a, b) { let d = b - a; while (d < 0) d += N; while (d >= N) d -= N; return d; }
+
+// Does `o` currently occupy `lane` (primary lane, or the lane it is leaving
+// while its body still straddles the line)?
+function occupiesLane(o, lane) { return o.lane === lane || o.lane2 === lane; }
 
 // Find the nearest car ahead of `car` in `lane` (excluding itself). Returns
 // { gap, leadV } where gap is bumper-to-bumper in cells (may be slightly
@@ -726,7 +756,7 @@ function fwd(a, b) { let d = b - a; while (d < 0) d += N; while (d >= N) d -= N;
 function leaderInLane(car, lane, maxScan) {
   let bestD = Infinity, lead = null;
   for (const o of sim.cars) {
-    if (o === car || o.lane !== lane) continue;
+    if (o === car || !occupiesLane(o, lane)) continue;
     const d = fwd(car.cell, o.cell);
     // d === 0 means another car sits on the exact same cell (a would-be overlap,
     // e.g. evaluating a merge onto an occupant). Count it as the nearest leader
@@ -734,7 +764,7 @@ function leaderInLane(car, lane, maxScan) {
     if (d >= 0 && d < bestD && d <= maxScan) { bestD = d; lead = o; }
   }
   if (!lead) return { gap: maxScan, leadV: car.v, lead: null };
-  return { gap: bestD - CAR_LEN, leadV: lead.v, lead };
+  return { gap: bestD - (car.len || CAR_LEN), leadV: lead.v, lead };
 }
 
 // Find the nearest car behind `car` in `lane` (the would-be follower). Returns
@@ -742,12 +772,12 @@ function leaderInLane(car, lane, maxScan) {
 function followerInLane(car, lane, maxScan) {
   let bestD = Infinity, foll = null;
   for (const o of sim.cars) {
-    if (o === car || o.lane !== lane) continue;
+    if (o === car || !occupiesLane(o, lane)) continue;
     const d = fwd(o.cell, car.cell);   // distance from o forward to car
     if (d > 0 && d < bestD && d <= maxScan) { bestD = d; foll = o; }
   }
   if (!foll) return { gap: maxScan, foll: null };
-  return { gap: bestD - CAR_LEN, foll };
+  return { gap: bestD - (foll.len || CAR_LEN), foll };
 }
 
 // Public helper (rendering/other agents may use): bumper-to-bumper gap in cells
@@ -760,7 +790,10 @@ function leaderGap(car, lane) {
 // Distance ahead (cells) to the next STATIONARY virtual obstacle for `car` in
 // `lane`: a red/yellow stop line, the incident block, or the end-of-ramp wall.
 // Returns Infinity when none. Used as a virtual leader with speed 0.
-function virtualObstacle(car, lane) {
+// `skipWall` ignores the end-of-ramp wall — used when evaluating the lane a
+// merging car is LEAVING, so a half-merged car isn't braked by a wall its body
+// is already escaping.
+function virtualObstacle(car, lane, skipWall) {
   let best = Infinity;
   const lights = cfg().lightCells;
   if (lights) {
@@ -777,7 +810,7 @@ function virtualObstacle(car, lane) {
     const d = fwd(car.cell, INCIDENT_CELL);
     if (d < best) best = d;
   }
-  if (cfg().hasRamp && lane === rampLaneIdx()) {
+  if (!skipWall && cfg().hasRamp && lane === rampLaneIdx()) {
     // Wall at the end of the acceleration lane: the car must merge before it.
     const d = (rampEnd() - car.cell);
     if (d >= 0 && d < best) best = d;
@@ -814,34 +847,52 @@ function idmAccel(car, gap, leadV) {
 }
 
 // The acceleration `car` would get following the nearest real OR virtual leader
-// in `lane` — the value MOBIL and the integrator both consult.
-function accelInLane(car, lane) {
+// in `lane` — the value MOBIL and the integrator both consult. `skipWall` is
+// passed when this is the lane a merging car is leaving (see virtualObstacle).
+function accelInLane(car, lane, skipWall) {
   const scan = Math.ceil(carV0(car) * 1.6) + 8;
   const r = leaderInLane(car, lane, scan);
   let gap = r.gap, leadV = r.leadV;
   // A stationary virtual obstacle (red light / incident / ramp wall) becomes the
   // effective leader (speed 0) when its stop line is nearer than the real leader.
-  const obst = virtualObstacle(car, lane);
+  const obst = virtualObstacle(car, lane, skipWall);
   if (Number.isFinite(obst)) {
-    const obstGap = obst - CAR_LEN;
+    const obstGap = obst - (car.len || CAR_LEN);
     if (obstGap < gap) { gap = obstGap; leadV = 0; }
   }
   return idmAccel(car, gap, leadV);
 }
 
 //──────────────────────────── MOBIL lane changing ────────────────────────────
-// Safety criterion: the prospective new follower's IDM accel after the change
-// must satisfy ã_new ≥ −b_safe (it must not be forced to brake harder than the
-// safe limit). Incentive criterion (asymmetric, with keep-right bias):
-//   ã_c − a_c  >  p·[ (a_o − ã_o) + (a_n − ã_n) ]  +  Δa_th  +  Δa_bias
-// where c = ego, o = old follower (current lane), n = new follower (target lane),
-// tilde = after the hypothetical move. Δa_bias encodes keep-right / left-pref.
+// Lane changes are a realistic multi-phase manoeuvre:
+//   DECIDE  : MOBIL incentive (asymmetric, keep-right biased) says a change is
+//             worthwhile — or it is forced (ramp merge, off-ramp weave).
+//   SIGNAL  : the blinker comes on for prof.signalTime simulated seconds
+//             BEFORE any lateral movement.
+//   GAP WAIT: after signalling, the car merges only once a safe pocket exists
+//             (gap ahead + behind in the target lane, scaled by relative speed
+//             and the driver's gapAccept). While waiting it keeps signalling;
+//             courteous followers in the target lane ease off to open the gap
+//             (yieldPass), aggressive ones may close it instead. Discretionary
+//             attempts give up after prof.patience seconds.
+//   EXECUTE : the lateral slide takes LANE_CHANGE_TIME (~2.6 s) on a smoothstep
+//             curve, the body visibly steering over (car.tilt). From the first
+//             moment it occupies BOTH lanes: target-lane traffic treats it as a
+//             leader immediately, old-lane traffic until it is mostly across,
+//             and the ego car-follows against both lanes (integrator takes the
+//             min accel). If the pocket collapses early, it aborts back.
 //
-// We evaluate a hypothetical by temporarily moving the ego car to the target
-// lane, recomputing the affected accelerations, then restoring it.
-function mobilGain(car, target) {
+// MOBIL incentive (no hard gap gate here — that is what the gap wait is for):
+//   ã_c − a_c + p·[(ã_o − a_o) + (ã_n − a_n)] + Δa_bias − Δa_th > 0
+// where c = ego, o = old follower, n = new follower, tilde = after the move.
+function mobilDesire(car, target) {
   if (target < 0 || target > sim.lanes - 1) return null;
   const prof = car.prof;
+
+  // Someone right alongside in the target lane: nothing to evaluate yet — the
+  // configuration has to change before a merge could even be attempted.
+  if (leaderInLane(car, target, N).gap < 0.3) return null;
+  if (followerInLane(car, target, N).gap < -0.2) return null;
 
   // Current-lane actors.
   const aC = accelInLane(car, car.lane);
@@ -860,17 +911,6 @@ function mobilGain(car, target) {
   const aNt = newFollow ? accelInLane(newFollow, newFollow.lane) : 0; // new follower after
   car.lane = savedLane;
 
-  // Hard safety. The ego must arrive into a real pocket — a positive bumper gap
-  // both ahead and behind in the target lane — and the new follower must not be
-  // forced to brake harder than −b_safe. The small MERGE_MARGIN keeps the move
-  // from snapping a car a hair's breadth from its new neighbours (which the
-  // sub-step integrator could momentarily turn into an overlap).
-  const newFollowGap = followerInLane(car, target, N).gap;
-  const leadGapT = leaderInLane(car, target, N).gap;
-  if (aNt < -B_SAFE) return null;
-  if (newFollowGap < MERGE_MARGIN) return null;
-  if (leadGapT < MERGE_MARGIN) return null;
-
   // Keep-right / left-preference bias (asymmetric MOBIL). Moving right (toward
   // higher lane index) is rewarded by biasRight; moving left is rewarded by
   // leftPref (aggressive drivers chase the faster left lanes).
@@ -882,76 +922,199 @@ function mobilGain(car, target) {
   return incentive + bias - prof.threshold;          // > 0 ⇒ change is worthwhile
 }
 
-// Animate a lane change: snap the logical lane, but start the visual lateral
-// slide from the old lane so the body is drawn straddling the line for ~1.2 s.
-const LANE_CHANGE_TIME = 1.2;   // seconds for the lateral slide
-function commitLaneChange(car, target) {
-  car.laneFrom = car.laneCoord;   // start slide from where the body currently is
-  car.lane = target;
-  car.laneTo = target;
+// Is there a safe pocket in `target` for `car` to begin merging into RIGHT NOW?
+// Demands a bumper gap ahead and behind sized by the closing speeds and the
+// driver's gapAccept; urgency (ramp wall, blocked lane, imminent exit) lets a
+// driver accept progressively tighter gaps so traffic never wedges solid.
+function gapCheck(car, target, urgency) {
+  const ga = car.prof.gapAccept * Math.max(0.35, 1 - urgency);
+  const lead = leaderInLane(car, target, N);
+  const needAhead = Math.max(MERGE_MARGIN * 0.5,
+    (0.8 + 0.9 * Math.max(0, car.v - lead.leadV)) * ga);
+  if (lead.gap < needAhead) return false;
+
+  const fol = followerInLane(car, target, N);
+  if (fol.foll) {
+    const needBehind = Math.max(MERGE_MARGIN * 0.5,
+      (0.6 + 1.0 * Math.max(0, fol.foll.v - car.v)) * ga);
+    if (fol.gap < needBehind) return false;
+    // Hard safety: the new follower must not be forced into harsh braking.
+    const saved = car.lane;
+    car.lane = target;
+    const aNt = accelInLane(fol.foll, fol.foll.lane);
+    car.lane = saved;
+    if (aNt < -B_SAFE) return false;
+  }
+  return true;
+}
+
+// How pressed is this driver to complete its pending change? 0 = relaxed.
+function lcUrgency(car) {
+  let u = 0;
+  if (cfg().hasRamp && (car.lane === rampLaneIdx() || car.lane2 === rampLaneIdx())) {
+    const d = rampEnd() - car.cell;          // distance to the end-of-ramp wall
+    u = Math.max(u, d < 2 ? 0.75 : d < 4 ? 0.55 : d < 7 ? 0.35 : 0.15);
+  }
+  if (car.exiting && cfg().hasOffRamp && car.lane < sim.lanes - 1) {
+    const d = fwd(car.cell, cfg().offRampCell);
+    if (d < 5) u = Math.max(u, 0.6); else if (d < 12) u = Math.max(u, 0.35);
+  }
+  if (sim.incident && cfg().hasIncident && car.lane === sim.lanes - 1) {
+    const d = fwd(car.cell, INCIDENT_CELL);
+    if (d < 8) u = Math.max(u, 0.55);        // creeping out of the blocked lane
+  }
+  return u;
+}
+
+const LANE_CHANGE_TIME = 2.6;   // seconds for the lateral slide (smoothstep)
+
+// DECIDE → SIGNAL: switch the blinker on; no lateral movement yet. Forced
+// merges (on-ramp) signal from the moment they hit the accel lane, so by the
+// time a gap exists they've blinked plenty — they may move after ~1 s rather
+// than stalling at the wall waiting out a long courtesy blink.
+function startSignal(car, target, forced) {
+  car.lc = {
+    target, dir: Math.sign(target - car.lane), phase: 'signal',
+    t: 0, wait: 0, forced, from: car.lane,
+    sigTime: (forced ? Math.min(1, car.prof.signalTime) : car.prof.signalTime) *
+             (0.8 + Math.random() * 0.4),
+  };
+  car.signal = car.lc.dir;
+}
+
+// SIGNAL → EXECUTE: begin the physical merge. The car immediately becomes the
+// leader for target-lane traffic behind it (lane = target) while continuing to
+// occupy and block the lane it is leaving (lane2) until mostly across.
+function beginExecute(car) {
+  const lc = car.lc;
+  lc.phase = 'execute';
+  lc.from = car.lane;
+  car.lane2 = car.lane;
+  car.lane = lc.target;
+  car.laneFrom = car.laneCoord;   // slide starts from where the body actually is
+  car.laneTo = lc.target;
   car.laneT = 0;
-  car.cool = 1.2;                 // brief cooldown (s) before the next change
   sim.evLaneChanges.push(sim.time);
 }
 
-// One MOBIL pass: every car considers the lane(s) adjacent to it. Forced moves
-// (ramp merge, exiting toward the off-ramp, leaving a vanished lane) take
-// priority over discretionary MOBIL incentive changes.
+function cancelLC(car, cool) {
+  car.lc = null;
+  car.signal = 0;
+  car.cool = cool;
+}
+
+// Early-phase escape hatch: if the pocket collapses while the body has barely
+// crossed the line, steer back into the origin lane instead of forcing it.
+function maybeAbort(car) {
+  const lc = car.lc;
+  if (lc.phase !== 'execute' || car.laneT >= 0.45) return;
+  const lead = leaderInLane(car, car.lane, 8);
+  const fol = followerInLane(car, car.lane, 8);
+  const collapsed =
+    lead.gap < 0.15 ||
+    (fol.foll && (fol.gap < 0.1 || (fol.gap < 0.7 && fol.foll.v - car.v > 1.3)));
+  if (!collapsed) return;
+  lc.phase = 'abort';
+  const back = lc.from;
+  car.lane2 = car.lane;           // still straddling the abandoned target lane
+  car.lane = back;
+  car.laneFrom = car.laneCoord;
+  car.laneTo = back;
+  car.laneT = 0;
+}
+
+// One lane-change pass per tick: advance every car's plan one phase step.
+// Forced moves (ramp merge, exiting toward the off-ramp) never give up;
+// discretionary ones re-validate their motive and eventually lose patience.
 function laneChangeStep() {
-  // Reservations made THIS pass, so two cars in different lanes can't both merge
-  // into the same (lane, ~cell) pocket — neither would see the other during
-  // evaluation since both are still in their origin lanes. Keyed by target lane,
-  // holding the committed cells; a move is blocked if it lands within ~1.5 car
-  // lengths of one already reserved.
-  const reserved = new Map();           // lane -> [cells]
-  const ringDist = (a, b) => Math.min(fwd(a, b), fwd(b, a));
-  const slotFree = (lane, cell) => {
-    const arr = reserved.get(lane);
-    if (!arr) return true;
-    return arr.every(c => ringDist(c, cell) > CAR_LEN + MERGE_MARGIN);
-  };
-  const reserve = (lane, cell) => {
-    if (!reserved.has(lane)) reserved.set(lane, []);
-    reserved.get(lane).push(cell);
-  };
-  const doCommit = (car, target) => {
-    if (!slotFree(target, car.cell)) return false;
-    commitLaneChange(car, target);
-    reserve(target, car.cell);
-    return true;
-  };
+  // Pockets claimed THIS tick, so two cars in different lanes can't both begin
+  // merging into the same (lane, ~cell) spot — neither would see the other
+  // during evaluation since both still register in their origin lanes.
+  const reserved = [];
+  const slotFree = (lane, cell, len) => reserved.every(r =>
+    r.lane !== lane ||
+    Math.min(fwd(r.cell, cell), fwd(cell, r.cell)) > (r.len + len) / 2 + MERGE_MARGIN + 0.5);
+
+  for (const car of sim.cars) { car.yieldFor = null; car.closeGap = false; }
 
   for (const car of sim.cars) {
+    const lc = car.lc;
+
+    if (lc && (lc.phase === 'execute' || lc.phase === 'abort')) {
+      maybeAbort(car);            // mid-manoeuvre: only watch for gap collapse
+      continue;
+    }
+
+    if (lc) {                     // ── SIGNAL / GAP-WAIT phase ──
+      lc.t += 1;
+      // Discretionary changes drop the plan if their own lane has opened up…
+      if (!lc.forced) {
+        const ownLead = leaderInLane(car, car.lane, N);
+        if (ownLead.gap > car.prof.T * car.v + 4) { cancelLC(car, 2); continue; }
+      }
+      if (lc.t < lc.sigTime) continue;        // minimum blink time not served yet
+      // …or after waiting too long for a gap that never comes.
+      if (!lc.forced && ++lc.wait > car.prof.patience) {
+        cancelLC(car, 3 + Math.floor(Math.random() * 3));
+        continue;
+      }
+      const urgency = lcUrgency(car);
+      if (gapCheck(car, lc.target, urgency) && slotFree(lc.target, car.cell, car.len)) {
+        reserved.push({ lane: lc.target, cell: car.cell, len: car.len });
+        beginExecute(car);
+      }
+      continue;
+    }
+
     if (car.cool > 0) { car.cool -= 1; continue; }
-    if (car.laneT < 1) continue;     // already mid-slide, let it finish
 
     // Ramp/accel-lane cars: their only move is to merge LEFT into the rightmost
-    // main lane. They use MOBIL safety but a relaxed incentive (they MUST merge
-    // before the wall), and a zipper shape lets them accept a tighter gap.
+    // main lane, and they MUST get it done before the wall — forced, no timeout.
     if (cfg().hasRamp && car.lane === rampLaneIdx()) {
-      const g = mobilGain(car, sim.lanes - 1);
-      // Force the merge as the wall approaches even if the plain incentive is
-      // marginal, as long as it passed the hard-safety gate (g !== null).
-      const urgency = Math.max(0, rampEnd() - car.cell) < 3 ? 0.5 : 0;
-      if (g !== null && g + urgency > -0.2) doCommit(car, sim.lanes - 1);
+      startSignal(car, sim.lanes - 1, true);
       continue;
     }
     if (sim.lanes < 2) continue;
 
     // Exiting cars (interchange) weave toward the rightmost lane for the ramp.
     if (car.exiting && car.lane < sim.lanes - 1) {
-      const g = mobilGain(car, car.lane + 1);
-      if (g !== null && g > -0.3 && doCommit(car, car.lane + 1)) continue;
+      const g = mobilDesire(car, car.lane + 1);
+      if (g !== null && g > -0.4) { startSignal(car, car.lane + 1, false); continue; }
     }
 
-    // Discretionary MOBIL: evaluate both neighbours, take the best positive gain.
-    let bestGain = 0, bestTarget = -1;
+    // Discretionary MOBIL: evaluate both neighbours, take the best gain. The
+    // 0.25 floor (on top of each profile's threshold) keeps churn down — a
+    // change must promise a real improvement before the blinker comes on.
+    let bestGain = 0.25, bestTarget = -1;
     for (const t of [car.lane - 1, car.lane + 1]) {
       if (car.exiting && t < car.lane) continue;   // exiters never drift left
-      const g = mobilGain(car, t);
+      const g = mobilDesire(car, t);
       if (g !== null && g > bestGain) { bestGain = g; bestTarget = t; }
     }
-    if (bestTarget >= 0) doCommit(car, bestTarget);
+    if (bestTarget >= 0) startSignal(car, bestTarget, false);
+  }
+
+  yieldPass();
+}
+
+// Cooperative yielding: a follower in the target lane that sees a blinker ahead
+// reacts according to temperament. Courteous drivers (politeness ≥ .25 — normal
+// and passive) ease off to open the gap; hot-headed ones (politeness < .1 —
+// aggressive) close it instead. Flags are consumed by the integrator this tick.
+function yieldPass() {
+  for (const car of sim.cars) {
+    const lc = car.lc;
+    if (!lc) continue;
+    const watching = lc.phase === 'signal' ||
+                     (lc.phase === 'execute' && car.laneT < 0.35);
+    if (!watching) continue;
+    const fol = followerInLane(car, lc.target, 9);
+    if (!fol.foll || fol.foll.lc) continue;   // busy with their own manoeuvre
+    // Already alongside (bumper gap gone): no point braking — drive on past
+    // and let the merger slot in behind instead.
+    if (fol.gap < 0.2) continue;
+    if (fol.foll.prof.politeness >= 0.25) fol.foll.yieldFor = car;
+    else if (fol.foll.prof.politeness < 0.1) fol.foll.closeGap = true;
   }
 }
 
@@ -960,12 +1123,37 @@ function advanceLaneAnim(dt) {
   for (const car of sim.cars) {
     if (car.laneT < 1) {
       car.laneT = Math.min(1, car.laneT + dt / LANE_CHANGE_TIME);
+      const t = car.laneT;
       // Smoothstep for a natural ease-in/out across the line.
-      const e = car.laneT * car.laneT * (3 - 2 * car.laneT);
+      const e = t * t * (3 - 2 * t);
       car.laneCoord = car.laneFrom + (car.laneTo - car.laneFrom) * e;
+      // Visible steering: yaw the body with the lateral velocity, which peaks
+      // mid-manoeuvre (smoothstep derivative 6t(1−t)) and straightens out.
+      const latV = (car.laneTo - car.laneFrom) * 6 * t * (1 - t) / LANE_CHANGE_TIME;
+      car.tilt = Math.max(-0.20, Math.min(0.20, latV * 0.34));
+      // Mostly across: release the lane being left for trailing traffic.
+      if (car.laneT >= 0.55 && car.lane2 != null) car.lane2 = null;
+      if (car.laneT >= 1) {
+        car.laneCoord = car.laneTo;
+        car.lane2 = null;
+        car.tilt = 0;
+        if (car.lc) {
+          // Settle into the lane before considering another move — except
+          // exiters mid-weave, who may need the next lane right away.
+          car.cool = car.lc.phase === 'abort' ? 4
+                   : car.exiting ? 1
+                   : 4 + Math.floor(Math.random() * 5);
+          car.lc = null;
+        }
+      }
     } else {
       car.laneCoord = car.lane;
+      car.tilt = 0;
     }
+    // Blinker state: an active plan owns the signal (off while steering back
+    // from an abort); otherwise committed exiters blink right for the ramp.
+    if (car.lc) car.signal = car.lc.phase === 'abort' ? 0 : car.lc.dir;
+    else car.signal = (car.exiting && car.exitDecided) ? 1 : 0;
   }
 }
 
@@ -976,13 +1164,6 @@ function advanceLaneAnim(dt) {
 // right edge (near cell N) drives off and despawns. prevCell/prevLane are saved
 // for the renderer's inter-tick interpolation.
 function speedAndMoveStep() {
-  // Snapshot prev state for interpolation.
-  for (const car of sim.cars) {
-    car.prevCell = car.cell;
-    car.prevLane = car.laneCoord;   // renderer lerps the CONTINUOUS lane coord
-    car.startV = car.v;
-  }
-
   // Integrate every car's IDM acceleration in lockstep sub-steps. Acceleration
   // is recomputed each sub-step against current positions; because per-substep
   // motion is small this stays collision-free without a strict parallel update.
@@ -990,7 +1171,27 @@ function speedAndMoveStep() {
     const acc = new Array(sim.cars.length);
     for (let i = 0; i < sim.cars.length; i++) {
       const car = sim.cars[i];
-      acc[i] = accelInLane(car, car.lane);
+      let a2 = accelInLane(car, car.lane);
+      // Mid lane change: car-follow against BOTH lanes (min of the two) so the
+      // straddling body never clips traffic in either. The lane being left
+      // ignores the end-of-ramp wall (the body is already escaping it).
+      if (car.lane2 != null) a2 = Math.min(a2, accelInLane(car, car.lane2, true));
+      if (car.yieldFor) {
+        // Courteous: ease off toward the signalling car ahead as if it were a
+        // leader wanting an extra courtesy buffer — gentle deceleration only,
+        // only while the merger is genuinely ahead and we'd otherwise keep
+        // closing on it (never brake to a standstill for a blinker).
+        const yf = car.yieldFor;
+        const g = fwd(car.cell, yf.cell) - (car.len || CAR_LEN);
+        if (g > 0.1 && car.v > yf.v - 0.2) {
+          const ay = idmAccel(car, Math.max(0.3, g - 1.0), yf.v);
+          if (ay < a2) a2 = Math.max(ay, -0.9);
+        }
+      } else if (car.closeGap && a2 > -0.5) {
+        // Aggressive: nudge forward to deny the merger the pocket.
+        a2 = Math.min(a2 + 0.35, car.prof.a);
+      }
+      acc[i] = a2;
     }
     for (let i = 0; i < sim.cars.length; i++) {
       const car = sim.cars[i];
@@ -1068,7 +1269,7 @@ function spawnStep() {
     else if (sim.rampQueue > want) sim.rampQueue = want;
 
     const entry = rampStart();
-    const entryFree = laneEntryFree(rampLaneIdx(), entry, 2.2);
+    const entryFree = laneEntryFree(rampLaneIdx(), entry, 3.6);
     if (sim.meterOn) {
       sim.meterTimer++;
       if (sim.meterTimer >= sim.meterInterval && sim.rampQueue > 0 && entryFree) {
@@ -1087,11 +1288,11 @@ function spawnStep() {
 // straddling the entry point) at `cell` in `lane` for a fresh insertion?
 function laneEntryFree(lane, cell, minGap) {
   for (const o of sim.cars) {
-    if (o.lane !== lane) continue;
+    if (!occupiesLane(o, lane)) continue;
     const ahead = fwd(cell, o.cell);          // o is ahead of the entry
     const behind = fwd(o.cell, cell);         // o is behind the entry
-    if (ahead < minGap + CAR_LEN) return false;
-    if (behind < CAR_LEN) return false;        // something on top of the entry
+    if (ahead < minGap) return false;         // room for the newcomer's body + gap
+    if (behind < o.len + 0.4) return false;   // something straddling the entry
   }
   return true;
 }
@@ -1107,10 +1308,10 @@ function spawnLeftEdge(target) {
   const lanes = [...Array(sim.lanes).keys()].sort(() => Math.random() - 0.5);
   for (const l of lanes) {
     if (budget <= 0) break;
-    if (!laneEntryFree(l, 0, 2.5)) continue;   // need breathing room
+    if (!laneEntryFree(l, 0, 4.5)) continue;   // need breathing room (truck-sized)
     // Entry speed: the desired free speed, capped by the gap ahead so the new
     // car doesn't immediately overrun its leader.
-    const r = leaderInLane({ lane: l, cell: 0, v: 0, prof: PROFILES.normal, isTruck: false, speedFactor: 1 }, l, N);
+    const r = leaderInLane({ lane: l, cell: 0, v: 0, len: CAR_LEN, prof: PROFILES.normal, isTruck: false, speedFactor: 1 }, l, N);
     const car = makeCar(l, 0, Math.max(0.5, Math.min(vmaxFloat(), r.gap)));
     sim.cars.push(car);
     budget--;
@@ -1118,15 +1319,28 @@ function spawnLeftEdge(target) {
 }
 
 function releaseRampCar(entry) {
-  const car = makeCar(rampLaneIdx(), entry, 0.8);  // re-rolls profile & exit chance
+  const car = makeCar(rampLaneIdx(), entry, 1.2);  // re-rolls profile & exit chance
   sim.cars.push(car);
   sim.rampQueue--;
 }
 
 //──────────────────────────── Sim tick ────────────────────────────
+// Snapshot prev state for the renderer's inter-tick interpolation. Taken at
+// the very top of the tick, BEFORE the lane animation advances, so the lateral
+// slide and steering tilt lerp smoothly at 60 fps instead of stepping per tick.
+function snapshotPrev() {
+  for (const car of sim.cars) {
+    car.prevCell = car.cell;
+    car.prevLane = car.laneCoord;   // renderer lerps the CONTINUOUS lane coord
+    car.prevTilt = car.tilt;
+    car.startV = car.v;
+  }
+}
+
 function tick() {
   sim.time++;
-  laneChangeStep();        // MOBIL: decide lane changes (snaps lane, starts slide)
+  snapshotPrev();          // freeze last tick's pose for 60 fps interpolation
+  laneChangeStep();        // signal / gap-wait / begin-merge state machine
   advanceLaneAnim(1);      // advance the lateral slide animation by one second
   speedAndMoveStep();      // IDM: integrate longitudinal motion & handle exits
   spawnStep();             // open-road inflow at the left edge (+ ramp)
@@ -1186,7 +1400,7 @@ function applyLaneCount(n) {
       // Find the nearest valid lane (search inward) that has a safe pocket.
       let placed = -1;
       for (let t = n - 1; t >= 0; t--) {
-        const probe = { lane: car.lane, cell: car.cell };
+        const probe = { lane: car.lane, cell: car.cell, len: car.len };
         const aheadGap = leaderInLane({ ...probe, v: car.v }, t, N).gap;
         const behindGap = followerInLane({ ...probe }, t, N).gap;
         if (aheadGap > 0.2 && behindGap > 0.2) { placed = t; break; }
@@ -1196,6 +1410,17 @@ function applyLaneCount(n) {
       car.laneFrom = car.laneTo = car.laneCoord = placed;
       car.laneT = 1;
     }
+  }
+
+  // Lane indices (and the ramp-lane index) just shifted under any in-flight
+  // lane-change plans: cancel them all cleanly so nobody slides into a lane
+  // that no longer exists. The cars re-decide within a couple of seconds.
+  for (const car of sim.cars) {
+    if (car.lc) { car.lc = null; car.signal = 0; car.cool = 2; }
+    if (car.lane2 != null) car.lane2 = null;
+    car.laneT = 1;
+    car.laneFrom = car.laneTo = car.laneCoord = car.lane;
+    car.tilt = 0;
   }
 
   sim.lanes = n;
@@ -1699,22 +1924,25 @@ function drawHighwayScene() {
   const ang = Math.atan2(appBot - ay, cBotX - cTopX);   // direction of travel up-ramp
 
   // queued cars stacked along the approach centreline, nose pointing up-ramp
-  const q = Math.min(sim.rampQueue, 8);
+  // (drawn at the same scale as live traffic so the queue reads as real cars)
+  const q = Math.min(sim.rampQueue, 5);
   if (q > 0) {
     for (let i = 0; i < q; i++) {
-      const t = 0.16 + i * (0.7 / 8);                   // 0=at meter, 1=foot of ramp
+      const t = 0.15 + i * 0.19;                        // 0=at meter, 1=foot of ramp
       ctx.save();
       ctx.translate(cTopX + (cBotX - cTopX) * t, ay + (appBot - ay) * t);
       ctx.rotate(ang);
-      ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(-5.6, -2.2, 11.6, 5.6);
-      ctx.fillStyle = '#a7adba'; rr(ctx, -6, -2.8, 11, 5.2, 1.5);
-      ctx.fillStyle = 'rgba(18,26,38,.75)'; ctx.fillRect(4.0, -2.1, 1.8, 3.8);
+      ctx.fillStyle = 'rgba(0,0,0,.3)'; rr(ctx, -8.4, -3.6, 17.4, 9, 2.6);
+      ctx.fillStyle = '#a7adba'; rr(ctx, -9, -4.4, 17, 8.4, 2.8);
+      ctx.fillStyle = 'rgba(18,26,38,.75)'; rr(ctx, 0.4, -3.3, 4, 6.6, 1.4);
+      ctx.fillStyle = '#ffedb0'; ctx.fillRect(-8.8, -3.6, 1.4, 1.8);
+      ctx.fillRect(-8.8, 1.8, 1.4, 1.8);
       ctx.restore();
     }
   }
-  if (sim.rampQueue > 8) {
+  if (sim.rampQueue > 5) {
     ctx.fillStyle = '#dfe2ea'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
-    ctx.fillText('+' + (sim.rampQueue - 8), cBotX, appBot + 14);
+    ctx.fillText('+' + (sim.rampQueue - 5), cBotX, appBot + 14);
     ctx.textAlign = 'left';
   }
 
@@ -1742,7 +1970,7 @@ function drawHighwayScene() {
     ctx.stroke();
     ctx.save();
     ctx.translate(ix + c * 0.45, yc); ctx.rotate(0.42);
-    const cl = Math.max(8, c * 0.95), chh = LANE_H * 0.42;
+    const cl = Math.max(12, c * CAR_LEN), chh = LANE_H * 0.55;
     ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fillRect(-cl / 2 + 1, -chh / 2 + 1.5, cl, chh);
     ctx.fillStyle = '#7d828d'; rr(ctx, -cl / 2, -chh / 2, cl, chh, 2);
     ctx.fillStyle = 'rgba(18,26,38,.8)'; ctx.fillRect(cl * 0.08, -chh / 2 + 1, 2, chh - 2);
@@ -1957,27 +2185,37 @@ function drawSensor(g, top, rh) {
 
 //—— Vehicles: shadowed, lit bodies (cab+trailer trucks), lerped between ticks ——
 // Cars travel left→right: front/headlights at x+len, rear/taillights at x.
-// car.color is the profile-coded paint and stays the dominant read; fine
-// details are gated on length so vehicles degrade to clean silhouettes when
-// the road is dense (cw() can drop well below 6 px). No save/restore and no
-// per-frame allocations in the loop — plain fills only.
+// Bodies are drawn at exactly car.len × cw() px long so bumper gaps on screen
+// match the physics, and ~0.62 × LANE_H wide so a car fills a realistic share
+// of its lane. car.color is the profile-coded paint and stays the dominant
+// read; fine details are gated on the ON-SCREEN size (len × zoom) so vehicles
+// degrade to clean silhouettes when small and bloom with detail when zoomed.
+// A car mid lane change is rotated by its steering tilt (save/translate/rotate
+// only while turning — straight-line traffic stays on the cheap path).
 
 function drawCars(a) {
   const top = roadTop(), c = cw();
-  const blink = Math.floor(performance.now() / 400) % 2 === 0;
+  const blink = Math.floor(performance.now() / 380) % 2 === 0;
   for (const car of sim.cars) {
     const pos = lerpPos(car, a);
-    // Lerp the CONTINUOUS lane coordinate (prev → current) so a MOBIL lane
-    // change is drawn straddling the line as the body slides across.
+    // Lerp the CONTINUOUS lane coordinate (prev → current) so a lane change
+    // is drawn straddling the line as the body slides across.
     const laneF = car.prevLane + (car.laneCoord - car.prevLane) * a;
     const x = pos * c;
     const y = top + laneF * LANE_H + LANE_H / 2;
-    // len = body length in px along travel; trucks longer than cars.
-    const len = car.isTruck ? c * 1.15 : c * 0.9;
+    const len = car.len * c;                  // body length in px = physics length
+    const tilt = car.prevTilt + (car.tilt - car.prevTilt) * a;
     // World-space footprint of this frame's draw, kept for click hit-testing
     // and the selection highlight.
     car.drawX = x; car.drawY = y; car.drawLen = len;
-    if (car.isTruck) drawTruck(car, x, y, len, blink);
+    if (Math.abs(tilt) > 0.004) {             // steering across the line
+      ctx.save();
+      ctx.translate(x + len / 2, y);
+      ctx.rotate(tilt);
+      if (car.isTruck) drawTruck(car, -len / 2, 0, len, blink);
+      else drawCar(car, -len / 2, 0, len, blink);
+      ctx.restore();
+    } else if (car.isTruck) drawTruck(car, x, y, len, blink);
     else drawCar(car, x, y, len, blink);
   }
 }
@@ -1988,7 +2226,7 @@ function drawCars(a) {
 function drawSelection() {
   const car = sim.selected;
   if (!car || car.drawX === undefined || !sim.cars.includes(car)) return;
-  const h = LANE_H * 0.8, pad = 3;
+  const h = car.drawH || LANE_H * 0.62, pad = 3;
   const pulse = 0.55 + 0.30 * Math.sin(performance.now() / 240);
   ctx.lineWidth = 1.4 / cam.z + 0.8;
   ctx.strokeStyle = `rgba(88,166,255,${pulse.toFixed(3)})`;
@@ -2000,31 +2238,40 @@ function drawSelection() {
                  car.drawLen + pad * 2, h + pad * 2);
 }
 
-// Rear (taillights / brake glow) + front (headlights) + exit indicators,
+// Rear (taillights / brake glow) + front (headlights) + blinking turn signals,
 // shared by cars and trucks. yt/h bound the body the lights attach to.
+// car.signal: −1 = changing toward a lower lane index (screen-up), +1 = toward
+// a higher index (screen-down); amber corner lamps blink on that side, front
+// and rear, through the whole signal → merge sequence.
 function drawVehicleLights(car, x, len, yt, h, blink) {
-  const lh = Math.max(1.4, h * 0.16);                  // lamp height scales w/ body
-  const inset = Math.min(2.0, h * 0.14);               // keep lamps off the edges
+  const lh = Math.max(1.6, h * 0.20);                  // lamp height scales w/ body
+  const lw = Math.max(1.3, len * 0.045);               // lamp width
+  const inset = Math.max(1, h * 0.10);                 // keep lamps off the edges
   if (car.braking) {
-    ctx.fillStyle = 'rgba(255,59,48,.30)';             // brake-light glow
-    ctx.fillRect(x - 1.8, yt - 0.5, 2.6, h + 1);
+    ctx.fillStyle = 'rgba(255,59,48,.35)';             // brake-light glow
+    ctx.fillRect(x - 2.4, yt + 0.5, 3.2, h - 1);
     ctx.fillStyle = '#ff3b30';
-  } else ctx.fillStyle = '#a63b30';
-  ctx.fillRect(x, yt + inset, 1.3, lh);                // taillights (both corners)
-  ctx.fillRect(x, yt + h - inset - lh, 1.3, lh);
-  ctx.fillStyle = '#ffe9ad';                           // headlights
-  ctx.fillRect(x + len - 1.4, yt + inset, 1.4, lh);
-  ctx.fillRect(x + len - 1.4, yt + h - inset - lh, 1.4, lh);
-  if (car.exiting && blink) {                          // right-turn indicators
-    ctx.fillStyle = '#ffb02e';
-    ctx.fillRect(x + len - 1.6, yt + h - 1.6, 1.6, 1.6);
-    ctx.fillRect(x, yt + h - 1.6, 1.6, 1.6);
+  } else ctx.fillStyle = '#b04038';
+  ctx.fillRect(x, yt + inset, lw, lh);                 // taillights (both corners)
+  ctx.fillRect(x, yt + h - inset - lh, lw, lh);
+  ctx.fillStyle = '#ffedb0';                           // headlights
+  ctx.fillRect(x + len - lw - 0.4, yt + inset, lw + 0.4, lh);
+  ctx.fillRect(x + len - lw - 0.4, yt + h - inset - lh, lw + 0.4, lh);
+  if (car.signal && blink) {                           // turn indicators
+    const sz = Math.max(2.2, h * 0.24);
+    const sy = car.signal > 0 ? yt + h - sz * 0.55 : yt - sz * 0.45;
+    ctx.fillStyle = 'rgba(255,176,46,.40)';            // glow halo
+    ctx.fillRect(x - 1.2, sy - 1.2, sz + 2.4, sz + 2.4);
+    ctx.fillRect(x + len - sz - 1.2, sy - 1.2, sz + 2.4, sz + 2.4);
+    ctx.fillStyle = '#ffb02e';                         // amber lamps, fore & aft
+    ctx.fillRect(x, sy, sz, sz);
+    ctx.fillRect(x + len - sz, sy, sz, sz);
   }
 }
 
 // Top-down car body outline: rounded rear, tapered/rounded front (hood).
-// Builds a path on g; caller sets fillStyle and calls fill(). Radius clamped
-// so it stays valid at tiny len. front = +x edge, rear = x edge.
+// Builds a path on g; caller sets fillStyle and calls fill() (or stroke()).
+// Radius clamped so it stays valid at tiny len. front = +x edge, rear = x edge.
 function carBody(g, x, yt, len, h) {
   const rRear = Math.min(h * 0.30, len * 0.22);        // squarer rear corners
   const rFront = Math.min(h * 0.46, len * 0.30);       // rounder hood corners
@@ -2040,106 +2287,131 @@ function carBody(g, x, yt, len, h) {
 }
 
 function drawCar(car, x, y, len, blink) {
-  // Width derived from len so the car is always clearly longer than wide
-  // (~2.2:1), clamped to fit the lane.
-  const h = Math.min(len * 0.46, LANE_H * 0.8), yt = y - h / 2;
+  // Width ≈ 62% of the lane (real car ≈ 1.8 m in a 3.7 m lane plus margin),
+  // capped so the body always reads clearly longer than wide.
+  const h = Math.min(LANE_H * 0.62, len * 0.56), yt = y - h / 2;
+  car.drawH = h;
   // Detail gates use the ON-SCREEN size, so zooming in reveals wheels,
   // glass and mirrors even when the world-space body is small.
   const lod = len * cam.z;
 
-  ctx.fillStyle = 'rgba(0,0,0,.32)';                   // soft drop shadow
-  rr(ctx, x + 0.7, yt + 1.8, len, h, h * 0.32);
+  ctx.fillStyle = 'rgba(0,0,0,.30)';                   // soft drop shadow
+  rr(ctx, x + 1, yt + 1.7, len, h, h * 0.34);
 
-  if (lod > 7) {                                       // tire tops at 4 corners
-    ctx.fillStyle = '#16171c';
-    const ww = Math.max(1.6, len * 0.16), wh = Math.max(1.2, h * 0.13);
-    const rearX = x + len * 0.13, frontX = x + len * 0.70;
-    ctx.fillRect(rearX, yt - wh * 0.5, ww, wh);        // top edge (both axles)
-    ctx.fillRect(frontX, yt - wh * 0.5, ww, wh);
-    ctx.fillRect(rearX, yt + h - wh * 0.5, ww, wh);    // bottom edge
-    ctx.fillRect(frontX, yt + h - wh * 0.5, ww, wh);
+  if (lod > 12) {                                      // wheels proud of the sides
+    ctx.fillStyle = '#0e1014';
+    const ww = Math.max(2.4, len * 0.16), wh = Math.max(1.8, h * 0.20);
+    const rearX = x + len * 0.10, frontX = x + len * 0.70;
+    rr(ctx, rearX, yt - wh * 0.40, ww, wh, wh * 0.35);  // top side, both axles
+    rr(ctx, frontX, yt - wh * 0.40, ww, wh, wh * 0.35);
+    rr(ctx, rearX, yt + h - wh * 0.60, ww, wh, wh * 0.35); // bottom side
+    rr(ctx, frontX, yt + h - wh * 0.60, ww, wh, wh * 0.35);
   }
 
   ctx.fillStyle = car.color;                           // painted body
   carBody(ctx, x, yt, len, h);
   ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,.28)';                 // crisp body rim
+  ctx.lineWidth = Math.max(0.7, h * 0.055);
+  carBody(ctx, x, yt, len, h);
+  ctx.stroke();
 
-  if (lod > 9) {                                       // greenhouse: roof + 2 windows
-    const gx = x + len * 0.30, gw = len * 0.40;        // glass band region
-    const gInset = h * 0.18;
-    ctx.fillStyle = 'rgba(18,28,46,.80)';              // windshield (forward)
-    rr(ctx, gx + gw * 0.58, yt + gInset, gw * 0.42, h - gInset * 2, 1.2);
-    rr(ctx, gx, yt + gInset, gw * 0.34, h - gInset * 2, 1.2); // rear window (aft)
-    ctx.fillStyle = 'rgba(150,180,210,.16)';           // subtle glass glint
-    rr(ctx, gx + gw * 0.58, yt + gInset, gw * 0.42, Math.max(1, h * 0.22), 1);
-    rr(ctx, gx, yt + gInset, gw * 0.34, Math.max(1, h * 0.22), 1);
-  } else if (lod > 5) {                                 // small: single glass cabin
-    ctx.fillStyle = 'rgba(18,28,46,.78)';
-    rr(ctx, x + len * 0.40, yt + h * 0.18, len * 0.34, h * 0.64, 1.2);
+  if (lod > 10) {                                      // curvature shading
+    ctx.fillStyle = 'rgba(0,0,0,.13)';                 // darker lower flank
+    rr(ctx, x + len * 0.05, yt + h * 0.66, len * 0.88, h * 0.24, h * 0.12);
+    ctx.fillStyle = 'rgba(255,255,255,.12)';           // lit upper flank
+    rr(ctx, x + len * 0.07, yt + h * 0.10, len * 0.84, h * 0.18, h * 0.09);
   }
 
-  if (lod > 9) {                                       // side mirror nubs (front)
-    ctx.fillStyle = car.color;
-    const mx = x + len * 0.66, mw = Math.max(1, len * 0.07), mh = Math.max(1, h * 0.12);
-    ctx.fillRect(mx, yt - mh, mw, mh);
-    ctx.fillRect(mx, yt + h, mw, mh);
+  if (lod > 14) {                                      // full greenhouse
+    const gIn = h * 0.14;
+    ctx.fillStyle = 'rgba(14,23,38,.88)';              // glass band: rear window
+    rr(ctx, x + len * 0.225, yt + gIn, len * 0.50, h - gIn * 2, h * 0.20); // → windshield
+    ctx.fillStyle = car.color;                         // roof panel on the glass
+    rr(ctx, x + len * 0.345, yt + gIn + h * 0.07, len * 0.225, h - gIn * 2 - h * 0.14, h * 0.12);
+    ctx.fillStyle = 'rgba(255,255,255,.15)';           // roof catches the light
+    rr(ctx, x + len * 0.345, yt + gIn + h * 0.07, len * 0.225, h - gIn * 2 - h * 0.14, h * 0.12);
+    ctx.fillStyle = 'rgba(165,200,240,.30)';           // windshield glint
+    rr(ctx, x + len * 0.60, yt + gIn + 1, len * 0.07, h - gIn * 2 - 2, 1.2);
+    ctx.fillStyle = car.color;                         // side mirrors at the A-pillar
+    const mw = Math.max(1.4, len * 0.06), mh = Math.max(1.4, h * 0.14);
+    ctx.fillRect(x + len * 0.585, yt - mh + 0.4, mw, mh);
+    ctx.fillRect(x + len * 0.585, yt + h - 0.4, mw, mh);
+  } else if (lod > 7) {                                 // small: single glass cabin
+    ctx.fillStyle = 'rgba(14,23,38,.82)';
+    rr(ctx, x + len * 0.30, yt + h * 0.18, len * 0.42, h * 0.64, 1.5);
   }
 
-  if (lod > 6) {                                       // glossy centerline roof sheen
-    ctx.fillStyle = 'rgba(255,255,255,.16)';
-    ctx.fillRect(x + len * 0.10, yt + h * 0.5 - 0.7, len * 0.55, 1.4);
+  if (lod > 24) {                                      // hood + trunk seam lines
+    ctx.strokeStyle = 'rgba(0,0,0,.18)'; ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(x + len * 0.80, yt + h * 0.16); ctx.lineTo(x + len * 0.80, yt + h * 0.84);
+    ctx.moveTo(x + len * 0.16, yt + h * 0.20); ctx.lineTo(x + len * 0.16, yt + h * 0.80);
+    ctx.stroke();
   }
 
   drawVehicleLights(car, x, len, yt, h, blink);
 }
 
 function drawTruck(car, x, y, len, blink) {
-  // Long and comparatively narrow from above (~3:1), clamped to the lane.
-  const h = Math.min(len * 0.34, LANE_H * 0.8), yt = y - h / 2;
+  // Wider than a car (~70% of the lane) and much longer; cab + boxed trailer.
+  const h = Math.min(LANE_H * 0.70, len * 0.27), yt = y - h / 2;
+  car.drawH = h;
   const lod = len * cam.z;                             // on-screen size gates detail
 
-  ctx.fillStyle = 'rgba(0,0,0,.34)';                   // soft drop shadow
-  rr(ctx, x + 0.7, yt + 1.9, len, h, h * 0.28);
+  ctx.fillStyle = 'rgba(0,0,0,.32)';                   // soft drop shadow
+  rr(ctx, x + 1, yt + 1.9, len, h, h * 0.22);
 
-  if (lod < 7) {                                       // too small for cab/trailer
+  if (lod < 18) {                                      // too small for cab/trailer
     ctx.fillStyle = car.color;
-    rr(ctx, x, yt, len, h, 1.5);
+    rr(ctx, x, yt, len, h, 2);
     drawVehicleLights(car, x, len, yt, h, blink);
     return;
   }
-  const cabLen = Math.max(2.6, len * 0.24);
-  const gap = Math.max(0.8, len * 0.04);
+  const cabLen = len * 0.205, gap = len * 0.02;
   const trLen = len - cabLen - gap;                    // trailer + visible gap
+  const cabX = x + trLen + gap;
 
-  if (lod > 9) {                                       // tandem trailer + cab wheels
-    ctx.fillStyle = '#16171c';
-    const wh = Math.max(1.2, h * 0.16);
-    ctx.fillRect(x + 1.0, yt - wh * 0.5, 1.8, wh);
-    ctx.fillRect(x + 3.6, yt - wh * 0.5, 1.8, wh);
-    ctx.fillRect(x + 1.0, yt + h - wh * 0.5, 1.8, wh);
-    ctx.fillRect(x + 3.6, yt + h - wh * 0.5, 1.8, wh);
-    ctx.fillRect(x + trLen + gap + 0.6, yt - wh * 0.5, 1.8, wh);
-    ctx.fillRect(x + trLen + gap + 0.6, yt + h - wh * 0.5, 1.8, wh);
+  // wheels: trailer tandems (rear), tractor drives (under the kingpin), steer
+  ctx.fillStyle = '#0e1014';
+  const wh = Math.max(2, h * 0.18), ww = Math.max(2.4, len * 0.035);
+  for (const fx of [0.05, 0.11, 0.66, 0.72, 0.93]) {
+    rr(ctx, x + len * fx, yt - wh * 0.40, ww, wh, 1);
+    rr(ctx, x + len * fx, yt + h - wh * 0.60, ww, wh, 1);
   }
 
   ctx.fillStyle = car.color;                           // boxy trailer…
   rr(ctx, x, yt, trLen, h, 1.5);
-  ctx.fillStyle = 'rgba(255,255,255,.28)';             // …lightened panel
+  ctx.fillStyle = 'rgba(255,255,255,.38)';             // …as a pale freight box
   rr(ctx, x, yt, trLen, h, 1.5);
-  ctx.strokeStyle = 'rgba(20,22,30,.55)'; ctx.lineWidth = 1;
-  ctx.strokeRect(x + 0.5, yt + 0.5, Math.max(1, trLen - 1), Math.max(1, h - 1)); // thin outline
+  ctx.strokeStyle = 'rgba(18,20,28,.50)'; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, yt + 0.5, Math.max(1, trLen - 1), Math.max(1, h - 1));
+  if (lod > 28) {                                      // ribbed trailer roof
+    ctx.strokeStyle = 'rgba(0,0,0,.10)';
+    ctx.beginPath();
+    for (let fx = x + 4; fx < x + trLen - 3; fx += 5.5) {
+      ctx.moveTo(fx, yt + 1.5); ctx.lineTo(fx, yt + h - 1.5);
+    }
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(0,0,0,.18)';                 // reefer unit at the nose
+    ctx.fillRect(x + trLen - 2.5, yt + h * 0.2, 2, h * 0.6);
+  }
 
-  ctx.fillStyle = car.color;                           // cab (rounded front)
-  const cabX = x + trLen + gap;
-  carBody(ctx, cabX, yt + h * 0.05, cabLen, h * 0.90);
+  ctx.fillStyle = car.color;                           // cab (rounded snout)
+  carBody(ctx, cabX, yt + h * 0.04, cabLen, h * 0.92);
   ctx.fill();
-  if (lod > 11) {                                      // cab windshield band
-    ctx.fillStyle = 'rgba(18,28,46,.82)';
-    ctx.fillRect(cabX + cabLen * 0.46, yt + h * 0.16,
-                 Math.max(1, cabLen * 0.3), h * 0.66);
-    ctx.fillStyle = 'rgba(150,180,210,.14)';           // glass glint
-    ctx.fillRect(cabX + cabLen * 0.46, yt + h * 0.16,
-                 Math.max(1, cabLen * 0.3), Math.max(1, h * 0.22));
+  ctx.strokeStyle = 'rgba(0,0,0,.30)'; ctx.lineWidth = 0.8;
+  carBody(ctx, cabX, yt + h * 0.04, cabLen, h * 0.92);
+  ctx.stroke();
+  if (lod > 24) {
+    ctx.fillStyle = 'rgba(14,23,38,.88)';              // cab windshield band
+    rr(ctx, cabX + cabLen * 0.40, yt + h * 0.14, cabLen * 0.26, h * 0.72, 1.2);
+    ctx.fillStyle = 'rgba(255,255,255,.14)';           // roof fairing sheen
+    rr(ctx, cabX + cabLen * 0.05, yt + h * 0.20, cabLen * 0.30, h * 0.60, 2);
+    ctx.fillStyle = car.color;                         // mirrors
+    const mh = Math.max(1.6, h * 0.13);
+    ctx.fillRect(cabX + cabLen * 0.42, yt - mh + 0.4, 1.6, mh);
+    ctx.fillRect(cabX + cabLen * 0.42, yt + h - 0.4, 1.6, mh);
   }
 
   drawVehicleLights(car, x, len, yt, h, blink);
@@ -2208,7 +2480,7 @@ function pickCar(sx, sy) {
     if (car.drawX === undefined) continue;
     const cx = car.drawX + car.drawLen / 2, cy = car.drawY;
     if (Math.abs(wx - cx) > car.drawLen / 2 + pad ||
-        Math.abs(wy - cy) > LANE_H / 2 + 2) continue;
+        Math.abs(wy - cy) > (car.drawH || LANE_H * 0.62) / 2 + pad) continue;
     const d = (wx - cx) ** 2 + (wy - cy) ** 2;
     if (d < bestD) { bestD = d; best = car; }
   }
@@ -2241,7 +2513,10 @@ function updateInspector() {
     lead.lead && car.v > 0.05 ? fmt(lead.gap / car.v, 1) + ' s' : '–';
   $('insLane').textContent =
     cfg().hasRamp && car.lane === rampLaneIdx() ? 'On-ramp' : 'Lane ' + (car.lane + 1);
-  let st = car.braking ? 'Braking'
+  let st = car.lc ? (car.lc.phase === 'signal' ? 'Signaling · waiting for gap'
+                   : car.lc.phase === 'abort' ? 'Aborting lane change'
+                   : 'Changing lanes')
+         : car.braking ? 'Braking'
          : car.v < 0.05 ? 'Stopped'
          : (car.accel || 0) > 0.05 ? 'Accelerating' : 'Cruising';
   if (car.exiting) st += ' · exiting';
