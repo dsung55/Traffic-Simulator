@@ -5,6 +5,7 @@ import {
   sim, cfg, rampLaneIdx, densityCap, effTarget, carV0,
 } from './state.js';
 import { leaderInLane, resetSim, applyLaneCount } from './engine.js';
+import { rng } from './rng.js';
 import { $, fmt } from './dom.js';
 
 //──────────────────────────── Metrics (every 500 ms) ────────────────────────────
@@ -242,8 +243,8 @@ function bindUI() {
     for (const car of sim.cars) {
       if (sim.exitRamp && ox !== undefined && car.cell < ox - 5 &&
           car.lane < sim.lanes) {  // accel-lane cars decide after merging
-        car.exitChance = Math.min(0.9, (sim.exitPct / 100) * (0.75 + Math.random() * 0.5));
-        car.exiting = Math.random() < car.exitChance;
+        car.exitChance = Math.min(0.9, (sim.exitPct / 100) * (0.75 + rng() * 0.5));
+        car.exiting = rng() < car.exitChance;
         car.exitDecided = true;
       } else if (!sim.exitRamp) {
         car.exiting = false;
