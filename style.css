@@ -1,0 +1,265 @@
+  :root{
+    --bg:#0c0e13; --bg-glow:rgba(64,118,255,.07);
+    --panel:#14171f; --panel-2:#1a1e29; --panel-3:#222736;
+    --border:#252b39; --border-2:#313849;
+    --text:#e9ebf2; --dim:#969cad; --faint:#697084;
+    --accent:#58a6ff; --accent-2:#3ddad0; --accent-soft:rgba(88,166,255,.14);
+    --accent-grad:linear-gradient(90deg,#58a6ff,#3ddad0);
+    --good:#3ecf6e; --warn:#f0c24b; --bad:#f0544a;
+    --track:#272d3d;
+    --r-sm:8px; --r-md:12px; --r-lg:16px;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 12px 32px -18px rgba(0,0,0,.65);
+    --ring:0 0 0 3px rgba(88,166,255,.35);
+    /* translucent surfaces used by the edge-docked glass bars */
+    --glass-border:rgba(120,134,168,.20);
+    --glass-2:rgba(26,30,41,.58);
+    --glass-3:rgba(34,39,54,.62);
+  }
+  *{box-sizing:border-box}
+  html{height:100%}
+  body{margin:0;height:100%;overflow:hidden;color:var(--text);background:var(--bg);
+    font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  ::selection{background:rgba(88,166,255,.35)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+  /* ── Fullscreen canvas (engine owns geometry; bars float over it) ── */
+  #canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block;z-index:0;
+    touch-action:none}
+
+  /* ── Edge-docked glass bars ─────────────────────────────────
+     TOP bar = brand + run state + live metrics.
+     BOTTOM bar = the input controls.
+     Each bar hugs its viewport edge so the centred road band between
+     them stays clear; both wrap and cap their height on small screens. */
+  .bar{position:fixed;left:0;right:0;z-index:10;
+    background:linear-gradient(180deg,rgba(18,21,29,.88),rgba(13,15,21,.80));
+    backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);}
+  #topbar{top:0;border-bottom:1px solid var(--glass-border);
+    box-shadow:0 10px 36px -16px rgba(0,0,0,.75);
+    display:flex;align-items:center;gap:12px 22px;flex-wrap:wrap;
+    padding:9px 20px;max-height:46vh;overflow-y:auto}
+  #bottombar{bottom:0;border-top:1px solid var(--glass-border);
+    box-shadow:0 -10px 36px -16px rgba(0,0,0,.75);
+    padding:12px 20px 14px;max-height:48vh;overflow-y:auto}
+
+  /* Subtle scrollbars for either bar when it overflows on small screens */
+  .bar::-webkit-scrollbar{width:8px;height:8px}
+  .bar::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:8px}
+  .bar::-webkit-scrollbar-track{background:transparent}
+
+  /* small uppercase caption shared by control groups + metric blocks */
+  .barTitle{margin:0;font-size:9.5px;font-weight:700;color:var(--faint);
+    text-transform:uppercase;letter-spacing:1.5px;white-space:nowrap}
+
+  /* ── Header (top bar) ───────────────────────────────────── */
+  .brand{flex:none;display:flex;align-items:center;gap:12px;padding-right:6px;
+    border-right:1px solid var(--glass-border)}
+  .logo{flex:none;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;
+    background:var(--accent-grad);color:#0a1018;
+    box-shadow:0 2px 10px -2px rgba(88,166,255,.55)}
+  h1{font-size:16px;margin:0;font-weight:650;letter-spacing:.2px;line-height:1.2}
+  .brandSub{font-size:11px;color:var(--faint);letter-spacing:.3px}
+  .topActions{flex:none;margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+  .chip{display:inline-flex;align-items:center;gap:8px;padding:6px 13px;border-radius:999px;
+    background:var(--panel-2);border:1px solid var(--border);font-size:12px;color:var(--dim);
+    transition:border-color .25s}
+  .chipDot{width:7px;height:7px;border-radius:50%;background:var(--good);
+    box-shadow:0 0 8px var(--good);animation:pulse 2.2s ease-in-out infinite}
+  .chip.paused .chipDot{background:var(--warn);box-shadow:0 0 8px var(--warn);animation:none}
+  .chip #statusState{color:var(--text);font-weight:600}
+  .chipSep{color:var(--faint)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ── Buttons ────────────────────────────────────────────── */
+  .btn{display:inline-flex;align-items:center;gap:7px;padding:7px 15px;border-radius:9px;
+    background:var(--panel-3);color:var(--text);border:1px solid var(--border-2);
+    font:inherit;font-size:13px;font-weight:600;cursor:pointer;
+    transition:background .15s,border-color .15s,transform .1s,box-shadow .2s,filter .15s}
+  .btn:hover{border-color:var(--accent);background:#283045}
+  .btn:active{transform:translateY(1px)}
+  .btn svg{flex:none}
+  .btn.primary{background:var(--accent-grad);border-color:transparent;color:#0a1018;
+    box-shadow:0 2px 12px -3px rgba(88,166,255,.5);min-width:104px;justify-content:center}
+  .btn.primary:hover{filter:brightness(1.1)}
+  .btn.primary.paused{background:linear-gradient(90deg,#3ecf6e,#37dca6);
+    box-shadow:0 2px 12px -3px rgba(62,207,110,.5)}
+
+  /* ── Controls (the entire bottom bar) ───────────────────── */
+  /* Groups tile across the bar and wrap onto extra rows on narrow widths. */
+  #controls{display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+    gap:14px 20px;align-items:start}
+  .group{display:flex;flex-direction:column;gap:10px;min-width:0;
+    padding-left:16px;border-left:1px solid var(--glass-border)}
+  .group:first-child{padding-left:0;border-left:none}
+  .group>h3{margin:0 0 1px;font-size:9.5px;font-weight:700;color:var(--faint);
+    text-transform:uppercase;letter-spacing:1.5px}
+  .hint{margin:-3px 0 0;font-size:10.5px;color:var(--faint)}
+  #scenarioDesc{margin:0;font-size:11px;line-height:1.45;color:var(--dim)}
+
+  .ctl{display:flex;flex-direction:column;gap:7px;min-width:0}
+  .ctl>label{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--dim);
+    white-space:nowrap;min-width:0}
+  .ctl.disabled{opacity:.35;filter:saturate(.3);pointer-events:none}
+  .ctl.disabled,.ctl.disabled *{cursor:not-allowed}
+  .group:has(.ctl.disabled):not(:has(.ctl:not(.disabled)))>h3{opacity:.45}
+
+  .val{display:inline-block;margin-left:auto;padding:1px 9px;border-radius:999px;
+    background:var(--accent-soft);color:#8ec3ff;font-size:11px;font-weight:600;
+    font-variant-numeric:tabular-nums;letter-spacing:.2px;
+    transition:background .25s,color .25s}
+  .val:empty{display:none}
+  @keyframes bump{0%{transform:scale(1.16);background:rgba(88,166,255,.4);color:#fff}
+    100%{transform:scale(1)}}
+  .val.bump{animation:bump .35s ease}
+
+  /* Selects */
+  select{width:100%;appearance:none;-webkit-appearance:none;
+    background:var(--panel-3) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23969cad' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+      no-repeat right 11px center;
+    color:var(--text);border:1px solid var(--border-2);border-radius:9px;
+    padding:7px 30px 7px 11px;font:inherit;font-size:13px;cursor:pointer;
+    transition:border-color .15s,background-color .15s}
+  select:hover{border-color:var(--accent)}
+  select:focus-visible{outline:none;border-color:var(--accent);box-shadow:var(--ring)}
+
+  /* Range sliders */
+  input[type=range]{appearance:none;-webkit-appearance:none;width:100%;height:20px;margin:0;
+    background:transparent;cursor:pointer}
+  input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:999px;
+    background:linear-gradient(90deg,var(--accent) 0%,var(--accent-2) var(--p,0%),
+      var(--track) var(--p,0%),var(--track) 100%)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+    width:16px;height:16px;margin-top:-5px;border-radius:50%;border:none;background:#f4f7ff;
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.25);
+    transition:transform .15s,box-shadow .2s}
+  input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.18)}
+  input[type=range]:active::-webkit-slider-thumb{transform:scale(1.32);
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 6px rgba(88,166,255,.22)}
+  input[type=range]:focus-visible{outline:none}
+  input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 1px 4px rgba(0,0,0,.55),var(--ring)}
+  input[type=range]::-moz-range-track{height:6px;border-radius:999px;background:var(--track)}
+  input[type=range]::-moz-range-progress{height:6px;border-radius:999px;background:var(--accent-grad)}
+  input[type=range]::-moz-range-thumb{width:16px;height:16px;border:none;border-radius:50%;
+    background:#f4f7ff;box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 1px rgba(0,0,0,.25);
+    transition:transform .15s,box-shadow .2s}
+  input[type=range]:hover::-moz-range-thumb{transform:scale(1.18)}
+  input[type=range]:active::-moz-range-thumb{transform:scale(1.32);
+    box-shadow:0 1px 4px rgba(0,0,0,.55),0 0 0 6px rgba(88,166,255,.22)}
+  input[type=range]:focus-visible::-moz-range-thumb{box-shadow:0 1px 4px rgba(0,0,0,.55),var(--ring)}
+
+  /* Toggle switches (real checkbox stays for a11y) */
+  .toggle{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--text);
+    cursor:pointer;position:relative;white-space:nowrap;min-width:0}
+  .toggle input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+  .tg{flex:none;width:36px;height:20px;border-radius:999px;background:var(--track);
+    border:1px solid var(--border-2);position:relative;
+    transition:background .2s,border-color .2s}
+  .tg::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;
+    border-radius:50%;background:#aab2c5;box-shadow:0 1px 3px rgba(0,0,0,.4);
+    transition:transform .2s cubic-bezier(.22,1.2,.36,1),background .2s}
+  .toggle:hover .tg{border-color:var(--accent)}
+  .toggle input:checked+.tg{background:var(--accent);border-color:var(--accent)}
+  .toggle input:checked+.tg::after{transform:translateX(16px);background:#fff}
+  .toggle input:focus-visible+.tg{box-shadow:var(--ring)}
+
+  /* ── Live metrics (horizontal strip in the top bar) ─────── */
+  /* The metrics read as a single inline strip of compact cards; on narrow
+     widths it wraps onto a second row within the top bar. */
+  #sidebar{flex:1 1 460px;min-width:0;
+    display:flex;align-items:stretch;flex-wrap:wrap;gap:8px 10px}
+  .card{background:var(--glass-2);border:1px solid var(--glass-border);border-radius:var(--r-sm);
+    padding:7px 11px;min-width:0;display:flex;flex-direction:column;justify-content:center}
+  .card[title]{cursor:help}
+  .mlabel{font-size:9.5px;font-weight:600;color:var(--dim);
+    text-transform:uppercase;letter-spacing:.9px}
+
+  /* Hero rating: label + score + gauge in one slim card */
+  .card.hero{flex:1 1 200px;background:linear-gradient(180deg,var(--glass-3),var(--glass-2));
+    border-color:var(--border-2);padding:8px 12px;gap:2px}
+  .heroTop{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  .heroVal{font-size:24px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums;
+    transition:color .5s}
+  .heroUnit{font-size:11px;font-weight:500;color:var(--faint);margin-left:3px}
+  #gaugeWrap{position:relative;height:9px;margin-top:6px;border-radius:999px;
+    background:#0e1118;border:1px solid var(--border);overflow:hidden}
+  #gaugeBar{height:100%;width:0%;border-radius:999px;background:var(--good);
+    transition:width .6s cubic-bezier(.22,1,.36,1),background .6s}
+  #gaugeWrap::after{content:"";position:absolute;inset:0;pointer-events:none;
+    background:repeating-linear-gradient(90deg,transparent 0,transparent calc(25% - 1px),
+      rgba(255,255,255,.13) calc(25% - 1px),rgba(255,255,255,.13) 25%)}
+  .gaugeScale{display:none}
+
+  /* Avg speed card: value beside a tight profile legend */
+  .speedCard{flex:1 1 230px;flex-direction:row;align-items:center;gap:12px}
+  .speedMain{display:flex;flex-direction:column;gap:1px}
+  .bigVal{display:block;font-size:20px;font-weight:700;line-height:1.1;
+    font-variant-numeric:tabular-nums}
+  .legend{display:flex;flex-direction:column;gap:2px;padding-left:12px;
+    border-left:1px dashed var(--border-2)}
+  .legend>span{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--dim);cursor:help}
+  .legend b{margin-left:auto;padding-left:8px;font-weight:600;color:var(--text);
+    font-variant-numeric:tabular-nums;font-size:10.5px}
+  .dotA,.dotN,.dotP{display:inline-block;flex:none;width:7px;height:7px;border-radius:50%}
+  .dotA{background:#ff6a5e;box-shadow:0 0 6px rgba(255,106,94,.6)}
+  .dotN{background:#c9c9d2}
+  .dotP{background:#6ea8e8;box-shadow:0 0 6px rgba(110,168,232,.5)}
+
+  /* Four compact stat cards */
+  .miniGrid{display:flex;flex-wrap:wrap;gap:8px}
+  .card.mini{flex:1 1 92px;gap:2px;padding:7px 11px}
+  .miniVal{font-size:14px;font-weight:650;font-variant-numeric:tabular-nums;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .sparkCard{flex:1 1 170px;gap:5px}
+  #spark{display:block;width:100%;height:34px;border-radius:5px;background:#0e1118}
+
+  /* ── Zoom controls (floating cluster, right edge) ───────── */
+  #zoomCtl{position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:9;
+    display:flex;flex-direction:column;gap:6px;align-items:center}
+  .zbtn{width:34px;height:34px;padding:0;justify-content:center;
+    font-size:17px;font-weight:600;border-radius:10px}
+  #zoomLevel{font-size:10.5px;color:var(--dim);background:var(--glass-2);
+    border:1px solid var(--glass-border);border-radius:999px;padding:2px 8px;
+    font-variant-numeric:tabular-nums;
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+
+  /* ── Vehicle inspector (opens when a car is clicked) ────── */
+  #inspector{position:fixed;left:14px;top:50%;transform:translateY(-50%);z-index:9;
+    width:236px;display:none;flex-direction:column;gap:8px;padding:12px 14px;
+    border-radius:13px;border:1px solid var(--glass-border);
+    background:linear-gradient(180deg,rgba(18,21,29,.92),rgba(13,15,21,.86));
+    backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);
+    box-shadow:0 14px 44px -18px rgba(0,0,0,.8)}
+  #inspector.show{display:flex}
+  .insHead{display:flex;align-items:center;gap:9px}
+  #insSwatch{flex:none;width:14px;height:14px;border-radius:4px;
+    border:1px solid rgba(255,255,255,.25)}
+  .insTitle{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+  .insTitle b{font-size:13px}
+  #insProf{font-size:10.5px;color:var(--faint);text-transform:capitalize}
+  .insX{margin-left:auto;flex:none;width:22px;height:22px;border:none;border-radius:6px;
+    background:transparent;color:var(--faint);font:inherit;font-size:15px;
+    cursor:pointer;line-height:1}
+  .insX:hover{background:var(--panel-3);color:var(--text)}
+  #insRows{display:flex;flex-direction:column;gap:4px;padding-top:8px;
+    border-top:1px solid var(--glass-border)}
+  .insRow{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--dim)}
+  .insRow b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;
+    white-space:nowrap}
+  .insHint{margin:2px 0 0;font-size:10px;color:var(--faint);line-height:1.4}
+
+  /* ── Responsive / motion ────────────────────────────────── */
+  @media (max-width:760px){
+    .brandSub{display:none}
+    .brand{border-right:none;padding-right:0}
+    #topbar{gap:10px 14px;padding:8px 14px}
+    #bottombar{padding:10px 14px 12px}
+    #controls{gap:12px 14px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *,*::before,*::after{transition-duration:.01ms!important;
+      animation-duration:.01ms!important;animation-iteration-count:1!important}
+  }
