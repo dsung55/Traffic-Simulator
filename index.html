@@ -566,8 +566,9 @@ function carColor(profName, isTruck) {
   if (profName === 'passive')    return `hsl(${h(205, 230)},${h(32, 50)}%,${h(55, 68)}%)`;
   return `hsl(${h(0, 360)},${h(8, 22)}%,${h(55, 80)}%)`;
 }
-// Create a car. Profile and truck status persist until the % sliders change,
-// at which point retuneFleet() may reassign them to match the new mix.
+// Create a car. Profile, truck status, speed factor and color are rolled ONCE
+// here from the CURRENT slider values and then persist for the car's entire
+// life — slider changes only affect cars spawned afterwards, never this one.
 function makeCar(lane, cell, v) {
   const isTruck = Math.random() * 100 < sim.pctTrucks;
   const profName = rollProfile(isTruck);
@@ -743,9 +744,14 @@ function speedAndMoveStep() {
     newV[i] = des;
   }
 
-  // 4. Move all cars; detect sensor crossings, off-ramp exits, wrap despawns.
+  // 4. Move all cars; detect sensor crossings, off-ramp exits, right-edge exits.
+  // Open-road model: traffic flows strictly left → right. A car that reaches the
+  // right edge (its position wraps from the high cells back toward 0) has driven
+  // off-screen on the right and LEAVES the simulation. Population is replenished
+  // solely by fresh inflow at the LEFT edge (spawnStep), so the on-screen fleet
+  // is a steady stream of new cars rather than an eternal carousel of the same
+  // ones — this is what lets changed settings accumulate as new cars enter left.
   const remove = new Set();
-  const target = effTarget();
   for (let i = 0; i < sim.cars.length; i++) {
     const car = sim.cars[i];
     car.braking = newV[i] < car.v;
@@ -771,8 +777,10 @@ function speedAndMoveStep() {
           car.exiting = false; // missed the exit — try again next lap
         }
       }
-      // Population control: despawn at the wrap point when over target.
-      if (car.cell < car.prevCell && sim.cars.length - remove.size > target) remove.add(i);
+      // Right-edge outflow: any car that crossed the seam this tick has exited
+      // on the right and despawns (main-lane traffic only — ramp/accel-lane cars
+      // are still merging and shouldn't vanish mid-merge before reaching a lane).
+      if (car.cell < car.prevCell && (!cfg().hasRamp || car.lane < sim.lanes)) remove.add(i);
     } else if (car.prevCell !== car.cell || newV[i] === 0) {
       // Stop event (city metric): car came to a halt this tick.
       if (car.braking && car.v === 0) sim.evStops.push(sim.time);
@@ -783,17 +791,26 @@ function speedAndMoveStep() {
 }
 
 //──────────────────────────── Spawning / ramp meter ────────────────────────────
+// Open-road inflow. New cars enter from the LEFT edge for every scenario and
+// flow rightward; the right-edge outflow in speedAndMoveStep removes them when
+// they reach the far side. The inflow rate is proportional to the remaining
+// deficit (target − current population) so the road fills GRADUALLY from empty
+// at reset, climbs toward effTarget() at a believable few-cars-per-second pace,
+// then holds near target (deficit→0 ⇒ inflow→0). Because makeCar reads the
+// CURRENT sliders, the stream entering on the left always reflects the latest
+// settings, and the on-screen mix shifts over time as old cars exit on the
+// right and new ones arrive on the left.
 function spawnStep() {
   const target = effTarget();
-  const pop = sim.cars.length;
 
   if (cfg().hasRamp) {
-    // Highway: small deficits flow in realistically through the on-ramp.
-    if (pop + sim.rampQueue < target) sim.rampQueue++;
-    else if (pop + sim.rampQueue > target) {
-      // Slider dropped: drain the waiting (off-road) queue immediately.
-      sim.rampQueue = Math.max(0, target - pop);
-    }
+    // Highway/interchange: the metered on-ramp is a SECONDARY inflow. It keeps a
+    // modest standing queue (so the meter and merge always have something to do)
+    // but no longer carries the whole population — the left edge is primary.
+    const pop = sim.cars.length;
+    const want = Math.max(0, target - pop);
+    if (sim.rampQueue < want && Math.random() < 0.5) sim.rampQueue++;
+    else if (sim.rampQueue > want) sim.rampQueue = want; // slider dropped: drain off-road queue
 
     const entry = rampStart();
     const entryFree = cellFree(rampLaneIdx(), entry);
@@ -806,68 +823,56 @@ function spawnStep() {
     } else if (sim.rampQueue > 0 && entryFree) {
       releaseRampCar(entry); // free merging: one per tick as space allows
     }
-  } else {
-    // City: small deficits enter at the left edge, one car per tick.
-    if (pop < target) {
-      const lanes = [...Array(sim.lanes).keys()];
-      for (const l of lanes.sort(() => Math.random() - 0.5)) {
-        if (cellFree(l, 0) && cellFree(l, 1) && cellFree(l, 2)) {
-          const car = makeCar(l, 0, Math.min(2, vmaxEff()));
-          sim.cars.push(car);
-          sim.grid[l][0] = sim.cars.length - 1;
-          break;
-        }
-      }
-    }
   }
+
+  // Primary inflow at the left edge (all scenarios). Drive the population toward
+  // target gradually: aim to close a small fraction of the deficit per tick.
+  spawnLeftEdge(target);
   convergePopulation(target);
 }
 
-// Fast convergence to the "Number of cars" slider. The ramp / left-edge
-// trickle adds at most 1 car/tick and the wrap-point despawn removes only
-// cars that happen to cross the seam, so a big slider move used to take
-// minutes to show. When the population is more than a couple of cars off
-// target we close ~1/3 of the gap per tick (geometric convergence: a full
-// 0↔200 jump settles within ~10 simulated seconds):
-//   - below target: spawn into sparse mainline stretches (free cell with
-//     clear space ahead and behind, entry speed capped by the gap ahead so
-//     the insertion is collision-safe and doesn't shock followers);
-//   - above target: despawn randomly chosen cars, preferring those near the
-//     wrap seam where a disappearance is least visible.
-function convergePopulation(target) {
+// Inject fresh cars at the leftmost cells, never over target and never
+// over-packed. Rate scales with the deficit so a 0→target fill takes a few
+// seconds rather than happening instantly; once near target the rate falls to a
+// trickle that just replaces the cars leaving on the right.
+function spawnLeftEdge(target) {
+  // Cars already queued/merging on the ramp count toward the target so the two
+  // inflows don't overshoot together.
   const queued = cfg().hasRamp ? sim.rampQueue : 0;
-  const deficit = target - sim.cars.length - queued;
-
-  if (deficit > 2) {
-    let toSpawn = Math.ceil(deficit / 3);
-    let attempts = toSpawn * 10;
-    while (toSpawn > 0 && attempts-- > 0) {
-      const lane = Math.floor(Math.random() * sim.lanes);
-      const cell = Math.floor(Math.random() * N);
-      if (!cellFree(lane, cell)) continue;
-      const ahead = gapAhead(lane, cell, 8);
-      if (ahead < 1 || gapBehind(lane, cell, 3) < 2) continue; // sparse stretches only
-      const car = makeCar(lane, cell, Math.max(1, Math.min(vmaxEff(), ahead)));
-      sim.cars.push(car);
-      sim.grid[lane][cell] = sim.cars.length - 1;
-      toSpawn--;
-    }
-  } else if (sim.cars.length - target > 2) {
-    let toRemove = Math.ceil((sim.cars.length - target) / 3);
-    const seam = [], rest = [];
-    sim.cars.forEach((c, i) => (c.cell >= N - 20 || c.cell < 5 ? seam : rest).push(i));
-    const doomed = new Set();
-    for (const pool of [seam, rest]) {
-      while (toRemove > 0 && pool.length) {
-        doomed.add(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
-        toRemove--;
-      }
-    }
-    if (doomed.size) {
-      sim.cars = sim.cars.filter((_, i) => !doomed.has(i));
-      buildGrid(); // indices shifted
-    }
+  let deficit = target - sim.cars.length - queued;
+  if (deficit <= 0) return;
+  // Close ~1/8 of the deficit per tick, at least 1, capped per tick so even a
+  // full 0→target jump ramps in believably (≈ a few cars/sec) without shocking
+  // the lead vehicles. With ~5 ticks/sec this is a steady left-edge stream.
+  let budget = Math.min(sim.lanes, Math.max(1, Math.ceil(deficit / 8)));
+  // Shuffle lane order so inflow spreads across lanes rather than favoring lane 0.
+  const lanes = [...Array(sim.lanes).keys()].sort(() => Math.random() - 0.5);
+  for (const l of lanes) {
+    if (budget <= 0) break;
+    // Require a clear pocket at the entrance so the insertion is collision-safe
+    // (entry speed is capped by the gap ahead, preserving v ≤ gap).
+    if (!cellFree(l, 0)) continue;
+    const ahead = gapAhead(l, 0, 6);
+    if (ahead < 2) continue; // leave breathing room behind the previous arrival
+    const car = makeCar(l, 0, Math.max(1, Math.min(vmaxEff(), ahead)));
+    sim.cars.push(car);
+    sim.grid[l][0] = sim.cars.length - 1;
+    budget--;
   }
+}
+
+// Population convergence is now handled entirely by the open-road flow:
+//   - below target  → spawnLeftEdge() feeds more cars in from the LEFT, at a
+//                      rate proportional to the deficit, until target is reached;
+//   - above target  → the left-edge inflow throttles to zero (deficit ≤ 0) and
+//                      the surplus DRAINS OUT THE RIGHT naturally as cars reach
+//                      the far edge — no car is ever yanked from mid-screen.
+// This function is intentionally a no-op: the user does NOT want cars randomly
+// inserted into the middle of the road or randomly deleted to hit the slider
+// instantly. It is kept so existing call sites remain valid.
+function convergePopulation(target) {
+  /* no-op: see comment above — inflow at the left edge and outflow at the right
+     edge converge the population on their own, gradually and visibly. */
 }
 function releaseRampCar(entry) {
   const car = makeCar(rampLaneIdx(), entry, 1); // re-rolls profile & exit chance
@@ -886,58 +891,15 @@ function setCarProfile(car, name) {
   car.color = carColor(name, car.isTruck);
 }
 
-// Re-roll the existing fleet so the truck/profile mix matches the sliders
-// immediately. Without this, % sliders only affected newly spawned cars, and
-// on a ring with low turnover the fleet kept its old mix forever, so the
-// sliders appeared dead. Converts the minimum number of randomly chosen cars;
-// the "trucks are never aggressive" rule is preserved.
+// Intentionally a no-op. Driver/traffic % sliders (trucks, aggressive, passive)
+// must NEVER mutate cars already on the road — existing vehicles keep the
+// profile, truck status, speed factor and color they were born with. The new
+// mix takes effect only through cars spawned afterwards (makeCar reads the
+// current sliders), so the on-screen composition shifts gradually as new cars
+// enter at the left and old ones exit at the right. This function is kept
+// solely because the UI slider handlers still call retuneFleet().
 function retuneFleet() {
-  const cars = sim.cars, n = cars.length;
-  if (!n) return;
-  const pick = pool => pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
-
-  // 1. Truck share.
-  const wantTrucks = Math.round(n * sim.pctTrucks / 100);
-  const nTrucks = cars.filter(c => c.isTruck).length;
-  if (nTrucks > wantTrucks) {
-    const pool = cars.filter(c => c.isTruck);
-    for (let k = nTrucks - wantTrucks; k > 0 && pool.length; k--) {
-      const c = pick(pool);
-      c.isTruck = false;
-      setCarProfile(c, c.profName); // refresh color & speed factor as a car
-    }
-  } else if (nTrucks < wantTrucks) {
-    const pool = cars.filter(c => !c.isTruck);
-    for (let k = wantTrucks - nTrucks; k > 0 && pool.length; k--) {
-      const c = pick(pool);
-      c.isTruck = true;
-      c.v = Math.min(c.v, Math.floor(TRUCK_VMAX)); // governed cap applies now
-      setCarProfile(c, c.profName === 'aggressive' ? 'normal' : c.profName);
-    }
-  }
-
-  // 2. Aggressive share (drawn from non-truck, non-aggressive cars).
-  const wantAgg = Math.round(n * sim.pctAgg / 100);
-  const nAgg = cars.filter(c => c.profName === 'aggressive').length;
-  if (nAgg > wantAgg) {
-    const pool = cars.filter(c => c.profName === 'aggressive');
-    for (let k = nAgg - wantAgg; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'normal');
-  } else if (nAgg < wantAgg) {
-    const pool = cars.filter(c => !c.isTruck && c.profName === 'normal');
-    pool.push(...cars.filter(c => !c.isTruck && c.profName === 'passive'));
-    for (let k = wantAgg - nAgg; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'aggressive');
-  }
-
-  // 3. Passive share (trucks may be passive).
-  const wantPas = Math.round(n * sim.pctPas / 100);
-  const nPas = cars.filter(c => c.profName === 'passive').length;
-  if (nPas > wantPas) {
-    const pool = cars.filter(c => c.profName === 'passive');
-    for (let k = nPas - wantPas; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'normal');
-  } else if (nPas < wantPas) {
-    const pool = cars.filter(c => c.profName === 'normal');
-    for (let k = wantPas - nPas; k > 0 && pool.length; k--) setCarProfile(pick(pool), 'passive');
-  }
+  /* no-op — see comment above: existing cars are never re-rolled by sliders. */
 }
 
 //──────────────────────────── Sim tick ────────────────────────────
@@ -956,10 +918,13 @@ function tick() {
 }
 
 //──────────────────────────── Reset / seeding ────────────────────────────
-// Reset rebuilds the world. The road is pre-seeded to the target population
-// (uniformly spread); afterwards small population changes flow through the
-// on-ramp / left-edge spawn and wrap-point despawn rules, while large slider
-// moves converge quickly via convergePopulation().
+// Reset rebuilds the world and starts the road EMPTY. Traffic is no longer
+// pre-seeded across the whole ring; instead the open-road model takes over from
+// t=0 — fresh cars flow in at the LEFT edge (spawnStep → spawnLeftEdge) and the
+// population climbs toward effTarget() over a few seconds, so the user literally
+// watches traffic accumulate and congestion form from the left. Cars exit on the
+// right, keeping a steady left→right flow. The ramp queue also starts empty and
+// fills from spawnStep, so the highway/interchange on-ramp behaves the same way.
 function resetSim() {
   sim.cars = [];
   sim.rampQueue = 0;
@@ -968,21 +933,8 @@ function resetSim() {
   sim.evThroughput = []; sim.evLaneChanges = []; sim.evStops = [];
   sim.speedHistory = [];
 
-  const target = effTarget();
-  const perLane = Math.ceil(target / sim.lanes);
-  const used = new Set();
-  let placed = 0;
-  for (let l = 0; l < sim.lanes && placed < target; l++) {
-    const spacing = Math.max(1, Math.floor(N / perLane));
-    for (let k = 0; k < perLane && placed < target; k++) {
-      const cell = (k * spacing + Math.floor(Math.random() * Math.max(1, spacing - 1))) % N;
-      const key = l + ':' + cell;
-      if (used.has(key) || (sim.incident && cfg().hasIncident && l === sim.lanes - 1 && cell === INCIDENT_CELL)) continue;
-      used.add(key);
-      sim.cars.push(makeCar(l, cell, Math.floor(Math.random() * (vmaxEff() + 1))));
-      placed++;
-    }
-  }
+  // Road starts empty: no pre-seeding. spawnLeftEdge() builds the population up
+  // from zero toward effTarget() as the sim runs, entering from the left edge.
   if (cfg().style === 'city') genBuildings();
   buildGrid();
   sim.lastTickWall = performance.now();
