@@ -837,6 +837,6 @@ function genBuildings() {
 export {
   setEngineHooks,
   lightPhases, lightOffset, lightState, makeCar, fwd, occupiesLane,
-  leaderInLane, followerInLane, leaderGap, tick, resetSim, applyLaneCount,
-  genBuildings,
+  leaderInLane, followerInLane, leaderGap, idmAccel, accelInLane,
+  tick, resetSim, applyLaneCount, genBuildings,
 };

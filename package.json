@@ -1,0 +1,9 @@
+{
+  "name": "traffic-simulator",
+  "private": true,
+  "type": "module",
+  "description": "2D top-down highway/city traffic microsimulation (IDM + MOBIL) on an HTML5 canvas.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
