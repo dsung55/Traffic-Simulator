@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Traffic Simulator — NaSch Cellular Automaton</title>
+<title>Traffic Simulator — IDM + MOBIL Microsimulation</title>
 <style>
   :root{
     --bg:#0c0e13; --bg-glow:rgba(64,118,255,.07);
@@ -463,65 +463,92 @@
 <script>
 'use strict';
 /*
- * Traffic Simulator — Nagel-Schreckenberg cellular automaton.
+ * Traffic Simulator — continuous microsimulation (IDM + MOBIL).
  *
  * Units (fixed): 1 cell = 7.5 m (one car length); 1 tick = 1 simulated second.
- * Speeds are integers in cells/tick; 1 cell/tick = 7.5 m/s ≈ 16.8 mph.
- * The sim advances on a fixed 200 ms wall-clock interval; rendering runs at
- * 60 fps via requestAnimationFrame and lerps car positions between ticks.
+ * Positions (car.cell) and speeds (car.v, cells/second) are now FLOATS:
+ *   1 cell/s = 7.5 m/s ≈ 16.8 mph.
+ * Longitudinal motion is the Intelligent Driver Model (IDM); lane changes use
+ * MOBIL (incentive vs. politeness, with a hard safety criterion). Each tick
+ * integrates IDM over SUBSTEPS sub-steps (dt = 1/SUBSTEPS s) for stability and
+ * advances sim.time by 1 (= one simulated second). The sim advances on a fixed
+ * 200 ms wall-clock interval; rendering runs at 60 fps via requestAnimationFrame
+ * and lerps car positions between ticks.
  */
 
 //──────────────────────────── Constants ────────────────────────────
-const N = 200;                 // cells per lane (ring)
-const MPH_PER_CELL = 16.8;     // 1 cell/tick in mph
+// The world is ZOOMED IN versus the old N=200 ring: fewer cells across the
+// fullscreen canvas means each cell renders ~18–22px wide, so a ~1-cell car
+// reads as longer-than-wide rather than a squat block. Every cell-based
+// landmark below was rescaled from the old N=200 layout to this N.
+const N = 84;                  // cells per lane (≈ old 200, scaled ×0.42)
+const MPH_PER_CELL = 16.8;     // 1 cell/s in mph
 const TICK_MS = 200;           // wall-clock ms per sim tick
-const SENSOR_CELL = 150;       // throughput sensor
-const INCIDENT_CELL = 100;     // lane-closure obstacle
-const EXIT_DECIDE_CELL = 20;   // where cars commit to taking the off-ramp (40 cells upstream)
+const SUBSTEPS = 5;            // IDM integration sub-steps per tick (dt = 1/5 s)
+const SUB_DT = 1 / SUBSTEPS;
+const SENSOR_CELL = 63;        // throughput sensor (old 150)
+const INCIDENT_CELL = 42;      // lane-closure obstacle (old 100)
+const EXIT_DECIDE_CELL = 9;    // where cars commit to taking the off-ramp (old 20)
 const ROAD_MILES = N * 7.5 / 1609.34;
+const CAR_LEN = 1.0;           // physical car length in cells (used for gaps)
 
 const MERGE_SHAPES = {
-  taper:    { len: 10 },   // standard acceleration taper
-  zipper:   { len: 15 },   // alternating-priority zipper (relaxed rear gap)
-  parallel: { len: 25 },   // long parallel acceleration lane
+  taper:    { len: 5 },    // standard acceleration taper (old 10)
+  zipper:   { len: 7 },    // alternating-priority zipper, relaxed rear gap (old 15)
+  parallel: { len: 11 },   // long parallel acceleration lane (old 25)
 };
 
-// Per-profile driving parameters (see spec table).
+// Per-profile driving parameters, expressed as IDM + MOBIL knobs.
+//   v0Mult : multiplier on the posted limit for desired speed v0
+//   T      : safe time headway (s)
+//   s0     : minimum bumper-to-bumper gap (cells)
+//   a      : max acceleration (cells/s²)
+//   b      : comfortable deceleration (cells/s²)
+//   politeness : MOBIL politeness factor p (weight on neighbours' (dis)advantage)
+//   threshold  : MOBIL switching threshold Δa_th (cells/s²) — lower = changes eagerly
+//   biasRight  : keep-right bias a_bias (cells/s²) added to favour the right lane
+//   leftPref   : extra incentive (cells/s²) to favour moving left/faster
 const PROFILES = {
-  aggressive: { p: 0.08, headwayAdj: +1, gradual: false, accelEvery: 1,
-                safetyBehind: 2, cooldown: 0 },
-  normal:     { p: 0.20, headwayAdj:  0, gradual: false, accelEvery: 1,
-                safetyBehind: 3, cooldown: 3 },
-  passive:    { p: 0.35, headwayAdj: -2, gradual: true,  accelEvery: 2,
-                safetyBehind: 5, cooldown: 8 },
+  aggressive: { v0Mult: 1.06, T: 1.0, s0: 1.0, a: 2.2, b: 2.4,
+                politeness: 0.05, threshold: 0.05, biasRight: 0.05, leftPref: 0.30 },
+  normal:     { v0Mult: 1.00, T: 1.5, s0: 1.4, a: 1.6, b: 2.0,
+                politeness: 0.30, threshold: 0.15, biasRight: 0.20, leftPref: 0.05 },
+  passive:    { v0Mult: 0.94, T: 2.0, s0: 1.8, a: 1.1, b: 1.6,
+                politeness: 0.55, threshold: 0.25, biasRight: 0.35, leftPref: 0.00 },
 };
+// Truck overrides (merged onto whatever profile a truck draws): governed top
+// speed, longer effective body, gentle accel, larger minimum gap.
+const TRUCK_OVERRIDE = { v0Cap: 3.0, T: 1.8, s0: 2.0, a: 0.8, b: 1.6,
+                         politeness: 0.45, threshold: 0.30, biasRight: 0.40, leftPref: 0 };
+const B_SAFE = 4.0;            // MOBIL hard safety: no follower forced below −b_safe
+const MERGE_MARGIN = 1.0;     // min bumper gap (cells) required ahead & behind to commit a change
 
 // Scenario config objects. All scenario-specific behavior keys off these
 // fields — the sim loop itself contains no scenario branching by name.
 const SCENARIOS = {
   highway: {
     label: 'Highway with On-Ramp',
-    desc: 'Open 200-cell mainline: traffic enters at the left edge and exits at the right. A metered on-ramp feeds a second stream.',
+    desc: 'Open mainline: traffic enters at the left edge and exits at the right. A metered on-ramp feeds a second stream.',
     laneOptions: [2, 3, 4], defaultLanes: 3,
     speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
-    hasRamp: true, onRampCell: 140, hasOffRamp: false,
+    hasRamp: true, onRampCell: 59, hasOffRamp: false,
     hasIncident: true, lightCells: null, style: 'highway',
   },
   interchange: {
     label: 'Highway Interchange',
-    desc: 'Adds an off-ramp at cell 60 before the on-ramp at 140. Exiting cars weave right and peel off; the rest flow on to the right edge.',
+    desc: 'Adds an off-ramp before the on-ramp. Exiting cars weave right and peel off; the rest flow on to the right edge.',
     laneOptions: [2, 3, 4], defaultLanes: 3,
     speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
-    hasRamp: true, onRampCell: 140, hasOffRamp: true, offRampCell: 60,
+    hasRamp: true, onRampCell: 59, hasOffRamp: true, offRampCell: 25,
     hasIncident: true, lightCells: null, style: 'highway',
   },
   city: {
     label: 'City Arterial',
-    desc: 'Arterial street with signals at cells 50 / 110 / 170. Cars enter at the left edge, stop-and-go through the lights, and exit at the right.',
+    desc: 'Arterial street with signals. Cars enter at the left edge, stop-and-go through the lights, and exit at the right.',
     laneOptions: [1, 2], defaultLanes: 2,
     speedRange: [25, 45], speedStep: 5, defaultSpeed: 35,
     hasRamp: false, hasOffRamp: false,
-    hasIncident: false, lightCells: [50, 110, 170], style: 'city',
+    hasIncident: false, lightCells: [21, 46, 71], style: 'city',
   },
 };
 
@@ -540,7 +567,6 @@ const sim = {
 
   time: 0,             // sim ticks (= simulated seconds)
   cars: [],
-  grid: [],            // grid[lane][cell] = car index, -1 empty, -2 incident
   rampQueue: 0,        // cars waiting at the meter (not yet on the accel lane)
   meterTimer: 0,
   nextId: 1,
@@ -557,23 +583,16 @@ function rampLaneIdx() { return sim.lanes; }                  // accel lane sits
 function rampLen() { return MERGE_SHAPES[sim.mergeShape].len; }
 function rampStart() { return cfg().onRampCell; }
 function rampEnd() { return cfg().onRampCell + rampLen() - 1; } // last usable accel-lane cell
-function densityCap() { return Math.floor(sim.lanes * N * 0.4); }
+function densityCap() { return Math.floor(sim.lanes * N * 0.55); }
 function effTarget() { return Math.min(sim.targetCars, densityCap()); }
 
 /*
- * Fractional speed-limit model.
- * Posted limits rarely land on an integer number of cells/tick
- * (65 mph = 3.87 cells/tick), and the old Math.round() mapping collapsed
- * several slider steps onto the same integer vmax (55→3, 60/65/70/75→4),
- * so most speed-slider movements had literally no effect. Instead:
- *   - vmaxFloat() returns the real-valued limit in cells/tick; weather
- *     subtracts a fractional amount (rain ≈ −8 mph, fog ≈ −17 mph).
- *   - Each car carries a stable personal speedFactor (aggressive drivers run
- *     a few mph over the limit, passive a few under, normal ≈ at it).
- *   - Per tick a car's fractional top speed vf is realized probabilistically:
- *     floor(vf), plus one extra cell with probability frac(vf). The
- *     time-averaged top speed therefore equals vf exactly, so the reported
- *     avg mph (v × 16.8) responds monotonically to every 5 mph slider step.
+ * Continuous speed-limit model (cells/second).
+ * vmaxFloat() returns the real-valued posted limit in cells/s; weather
+ * subtracts a fractional amount (rain ≈ −8 mph, fog ≈ −17 mph). This is the
+ * BASE desired speed v0; each car scales it by its profile v0Mult and a stable
+ * personal speedFactor, so aggressive drivers run a few mph over the limit and
+ * passive a few under. Trucks are governed at TRUCK_OVERRIDE.v0Cap.
  */
 function vmaxFloat() {
   let v = sim.speedMph / MPH_PER_CELL;
@@ -581,20 +600,22 @@ function vmaxFloat() {
   else if (sim.weather === 'fog') v -= 1.0;   // ≈ 17 mph slower in fog
   return Math.max(1, v);
 }
-// Integer convenience (rounded) — used for scan bounds, spawn seeds and the
-// green-wave timing, never for a car's per-tick top speed.
-function vmaxEff() { return Math.max(1, Math.round(vmaxFloat())); }
-// Realize a fractional speed as an integer cells/tick value for this tick.
-function ditherV(vf) { const f = Math.floor(vf); return f + (Math.random() < vf - f ? 1 : 0); }
 // Stable per-car desired-speed multiplier, drawn once per profile assignment.
 function rollSpeedFactor(profName) {
-  if (profName === 'aggressive') return 1.04 + Math.random() * 0.08; // ~3–8 mph over the limit
-  if (profName === 'passive')    return 0.90 + Math.random() * 0.06; // ~3–7 mph under
-  return 0.97 + Math.random() * 0.06;                                // ≈ at the limit
+  if (profName === 'aggressive') return 1.02 + Math.random() * 0.06; // a touch over
+  if (profName === 'passive')    return 0.94 + Math.random() * 0.05; // a touch under
+  return 0.98 + Math.random() * 0.04;                                // ≈ at the limit
 }
-const TRUCK_VMAX = 3.0; // trucks governed at 3 cells/tick ≈ 50 mph regardless of limit
-// Randomization probability for a profile, +0.05 in rain/fog.
-function pEff(prof) { return prof.p + (sim.weather !== 'clear' ? 0.05 : 0); }
+// Per-car desired free-flow speed v0 (cells/s): posted limit × profile × personal,
+// capped for trucks. Weather already folded into vmaxFloat().
+function carV0(car) {
+  let v0 = vmaxFloat() * car.prof.v0Mult * car.speedFactor;
+  if (car.isTruck) v0 = Math.min(v0, TRUCK_OVERRIDE.v0Cap);
+  return Math.max(0.5, v0);
+}
+// Weather stiffens following: longer headway + stronger braking in rain/fog.
+function weatherTfactor() { return sim.weather === 'clear' ? 1 : sim.weather === 'rain' ? 1.15 : 1.3; }
+function weatherS0add() { return sim.weather === 'clear' ? 0 : sim.weather === 'rain' ? 0.3 : 0.5; }
 
 //──────────────────────────── Traffic lights (city) ────────────────────────────
 // Cycle split scales the default 30/4/26 s proportions to the slider value.
@@ -638,252 +659,387 @@ function carColor(profName, isTruck) {
 function makeCar(lane, cell, v) {
   const isTruck = Math.random() * 100 < sim.pctTrucks;
   const profName = rollProfile(isTruck);
+  // Build the effective IDM/MOBIL parameter set: base profile, then truck
+  // overrides merged on top. Stored per-car so slider changes never mutate it.
+  const base = PROFILES[profName];
+  const prof = isTruck ? Object.assign({}, base, TRUCK_OVERRIDE) : base;
   // Interchange: each car gets a permanent random 15–30% chance of taking the
-  // off-ramp; it rolls that chance each lap at EXIT_DECIDE_CELL, then weaves right.
+  // off-ramp; it rolls that chance once upstream of the ramp, then weaves right.
   const exitChance = cfg().hasOffRamp ? 0.15 + Math.random() * 0.15 : 0;
   return {
     id: sim.nextId++, lane, cell, v,
-    prevCell: cell, prevLane: lane,
-    profName, prof: PROFILES[profName], isTruck,
+    prevCell: cell, prevLane: lane, startV: v,
+    laneCoord: lane,          // CONTINUOUS lane coordinate (renderer reads this for y)
+    laneFrom: lane, laneTo: lane, laneT: 1, // lane-change animation state (laneT in [0,1])
+    profName, prof, isTruck,
     speedFactor: rollSpeedFactor(profName),
-    exitChance, exiting: Math.random() < exitChance,
-    cool: 0, age: 0, braking: false,
+    exitChance, exiting: Math.random() < exitChance, exitDecided: false,
+    cool: 0, age: 0, braking: false, accel: 0,
     color: carColor(profName, isTruck),
   };
 }
 
-//──────────────────────────── Grid & gap helpers ────────────────────────────
-function buildGrid() {
-  const rows = sim.lanes + (cfg().hasRamp ? 1 : 0);
-  sim.grid = [];
-  for (let l = 0; l < rows; l++) sim.grid.push(new Int16Array(N).fill(-1));
-  if (sim.incident && cfg().hasIncident) sim.grid[sim.lanes - 1][INCIDENT_CELL] = -2;
-  // Cars are written after the incident marker on purpose: if the incident is
-  // toggled on while a car occupies INCIDENT_CELL, the car (an obstacle too)
-  // takes precedence, drives off normally, and the -2 marker reappears on the
-  // next rebuild — the grid is rebuilt every tick, so toggling is immediate.
-  sim.cars.forEach((c, i) => { sim.grid[c.lane][c.cell] = i; });
-}
-function cellFree(lane, cell) { return sim.grid[lane][cell] === -1; }
+//──────────────────────────── Per-lane ordering & gap helpers ────────────────────────────
+// The world is OPEN (cars enter left at cell 0, exit right near cell N) but we
+// still scan with ring-wrap awareness for robustness. We keep no occupancy grid;
+// spatial queries are O(n) scans over sim.cars (≤ ~160 cars), which is plenty
+// fast. A car occupies [cell, cell+CAR_LEN) along travel; the bumper-to-bumper
+// gap to a leader at lead.cell is (lead.cell - car.cell - CAR_LEN), measured on
+// the forward (increasing-cell) direction with ring wrap.
 
-// Distance (in free cells) to the next physical obstacle ahead in a lane.
-function gapAhead(lane, cell, maxScan) {
-  for (let d = 1; d <= maxScan; d++) {
-    if (sim.grid[lane][(cell + d) % N] !== -1) return d - 1;
+// Forward distance from a to b in cells, on the ring [0,N).
+function fwd(a, b) { let d = b - a; while (d < 0) d += N; while (d >= N) d -= N; return d; }
+
+// Find the nearest car ahead of `car` in `lane` (excluding itself). Returns
+// { gap, leadV } where gap is bumper-to-bumper in cells (may be slightly
+// negative if overlapping) and leadV is the leader's speed (cells/s). If no
+// car is found within `maxScan` cells, returns a large gap and v0-ish speed.
+function leaderInLane(car, lane, maxScan) {
+  let bestD = Infinity, lead = null;
+  for (const o of sim.cars) {
+    if (o === car || o.lane !== lane) continue;
+    const d = fwd(car.cell, o.cell);
+    // d === 0 means another car sits on the exact same cell (a would-be overlap,
+    // e.g. evaluating a merge onto an occupant). Count it as the nearest leader
+    // so the resulting negative gap makes MOBIL/IDM reject/avoid the overlap.
+    if (d >= 0 && d < bestD && d <= maxScan) { bestD = d; lead = o; }
   }
-  return maxScan;
-}
-// Distance to the nearest car behind a cell in a lane (for merge safety).
-function gapBehind(lane, cell, maxScan) {
-  for (let d = 1; d <= maxScan; d++) {
-    if (sim.grid[lane][(cell - d + N) % N] !== -1) return d - 1;
-  }
-  return maxScan;
+  if (!lead) return { gap: maxScan, leadV: car.v, lead: null };
+  return { gap: bestD - CAR_LEN, leadV: lead.v, lead };
 }
 
-// Effective gap for a car: physical gap, clipped by red/yellow lights and the
-// end-of-ramp wall. Lights block ALL lanes at their cell; a yellow light only
-// blocks cars that are still outside stopping distance (d > v ⇒ must stop).
-function effGap(lane, cell, v) {
-  // Scan far enough to cover the fastest possible car (aggressive factor ≤ 1.12).
-  const scan = Math.ceil(vmaxFloat() * 1.15) + 6;
-  let g = gapAhead(lane, cell, scan);
+// Find the nearest car behind `car` in `lane` (the would-be follower). Returns
+// { gap, foll } where gap is bumper-to-bumper from the follower to `car`.
+function followerInLane(car, lane, maxScan) {
+  let bestD = Infinity, foll = null;
+  for (const o of sim.cars) {
+    if (o === car || o.lane !== lane) continue;
+    const d = fwd(o.cell, car.cell);   // distance from o forward to car
+    if (d > 0 && d < bestD && d <= maxScan) { bestD = d; foll = o; }
+  }
+  if (!foll) return { gap: maxScan, foll: null };
+  return { gap: bestD - CAR_LEN, foll };
+}
+
+// Public helper (rendering/other agents may use): bumper-to-bumper gap in cells
+// to the leader in `lane`, plus the leader's speed.
+function leaderGap(car, lane) {
+  const r = leaderInLane(car, lane, N);
+  return { gap: r.gap, leadV: r.leadV };
+}
+
+// Distance ahead (cells) to the next STATIONARY virtual obstacle for `car` in
+// `lane`: a red/yellow stop line, the incident block, or the end-of-ramp wall.
+// Returns Infinity when none. Used as a virtual leader with speed 0.
+function virtualObstacle(car, lane) {
+  let best = Infinity;
   const lights = cfg().lightCells;
   if (lights) {
-    for (const lc of lights) {
-      const d = (lc - cell + N) % N;
-      if (d >= 1 && d - 1 < g) {
-        const st = lightState(lights.indexOf(lc));
-        if (st === 'red' || (st === 'yellow' && d > v)) g = d - 1;
-      }
+    for (let i = 0; i < lights.length; i++) {
+      const st = lightState(i);
+      if (st === 'green') continue;
+      const d = fwd(car.cell, lights[i]);   // distance to the stop line
+      // Yellow: only stop if we cannot comfortably clear it (still > ~1 cell away).
+      if (st === 'yellow' && d < Math.max(1, car.v * 0.6)) continue;
+      if (d < best) best = d;
     }
   }
-  if (cfg().hasRamp && lane === rampLaneIdx()) {
-    g = Math.min(g, Math.max(0, rampEnd() - cell)); // wall at end of accel lane
+  if (sim.incident && cfg().hasIncident && lane === sim.lanes - 1) {
+    const d = fwd(car.cell, INCIDENT_CELL);
+    if (d < best) best = d;
   }
-  return g;
+  if (cfg().hasRamp && lane === rampLaneIdx()) {
+    // Wall at the end of the acceleration lane: the car must merge before it.
+    const d = (rampEnd() - car.cell);
+    if (d >= 0 && d < best) best = d;
+  }
+  return best;
 }
 
-//──────────────────────────── Lane changing ────────────────────────────
-// Two-step rule: (1) profile incentive, (2) safety — target cell empty and
-// rear gap in the target lane ≥ the profile's threshold. Runs as a sub-step
-// before the speed/move update so movement happens on a consistent grid.
-function tryChange(car, idx, target, requiredBehind) {
-  if (target < 0 || target > sim.lanes - 1) return false;
-  if (!cellFree(target, car.cell)) return false;
-  if (gapBehind(target, car.cell, requiredBehind + 1) < requiredBehind) return false;
-  sim.grid[car.lane][car.cell] = -1;
-  sim.grid[target][car.cell] = idx;
+//──────────────────────────── IDM longitudinal model ────────────────────────────
+// a_IDM = a·[ 1 − (v/v0)^δ − (s*(v,Δv)/s)² ],  with
+//   s*(v,Δv) = s0 + max(0, v·T + v·Δv / (2·√(a·b)))
+// where s is the bumper-to-bumper gap (cells), Δv = v − v_lead (approach rate),
+// v0 the desired speed (carV0). All quantities are in cell / cell·s⁻¹ units.
+const IDM_DELTA = 4;
+
+// Compute IDM acceleration (cells/s²) for `car` in `lane`, given the gap (cells)
+// to the effective leader and that leader's speed. Clamped for numerical safety.
+function idmAccel(car, gap, leadV) {
+  const prof = car.prof;
+  const v = car.v;
+  const v0 = carV0(car);
+  const a = prof.a, b = prof.b;
+  const T = prof.T * weatherTfactor();
+  const s0 = prof.s0 + weatherS0add();
+  // Guard the gap so a momentary overlap can't blow up the (s*/s)² term.
+  const s = Math.max(0.05, gap);
+  const dv = v - leadV;                              // approach rate
+  let sStar = s0 + v * T + (v * dv) / (2 * Math.sqrt(a * b));
+  if (sStar < s0) sStar = s0;                        // desired gap never below s0
+  let acc = a * (1 - Math.pow(v / v0, IDM_DELTA) - (sStar / s) * (sStar / s));
+  // Clamp braking to a sane bound (also caps the (s*/s)² blow-up near s→0).
+  if (acc < -B_SAFE * 2) acc = -B_SAFE * 2;
+  if (acc > a) acc = a;
+  return acc;
+}
+
+// The acceleration `car` would get following the nearest real OR virtual leader
+// in `lane` — the value MOBIL and the integrator both consult.
+function accelInLane(car, lane) {
+  const scan = Math.ceil(carV0(car) * 1.6) + 8;
+  const r = leaderInLane(car, lane, scan);
+  let gap = r.gap, leadV = r.leadV;
+  // A stationary virtual obstacle (red light / incident / ramp wall) becomes the
+  // effective leader (speed 0) when its stop line is nearer than the real leader.
+  const obst = virtualObstacle(car, lane);
+  if (Number.isFinite(obst)) {
+    const obstGap = obst - CAR_LEN;
+    if (obstGap < gap) { gap = obstGap; leadV = 0; }
+  }
+  return idmAccel(car, gap, leadV);
+}
+
+//──────────────────────────── MOBIL lane changing ────────────────────────────
+// Safety criterion: the prospective new follower's IDM accel after the change
+// must satisfy ã_new ≥ −b_safe (it must not be forced to brake harder than the
+// safe limit). Incentive criterion (asymmetric, with keep-right bias):
+//   ã_c − a_c  >  p·[ (a_o − ã_o) + (a_n − ã_n) ]  +  Δa_th  +  Δa_bias
+// where c = ego, o = old follower (current lane), n = new follower (target lane),
+// tilde = after the hypothetical move. Δa_bias encodes keep-right / left-pref.
+//
+// We evaluate a hypothetical by temporarily moving the ego car to the target
+// lane, recomputing the affected accelerations, then restoring it.
+function mobilGain(car, target) {
+  if (target < 0 || target > sim.lanes - 1) return null;
+  const prof = car.prof;
+
+  // Current-lane actors.
+  const aC = accelInLane(car, car.lane);
+  const oldFollow = followerInLane(car, car.lane, N).foll;
+  const aO = oldFollow ? accelInLane(oldFollow, oldFollow.lane) : 0;
+
+  // Target-lane actors as they are NOW (before the move).
+  const newFollow = followerInLane(car, target, N).foll;
+  const aN = newFollow ? accelInLane(newFollow, newFollow.lane) : 0;
+
+  // Hypothetically move the ego car into the target lane.
+  const savedLane = car.lane;
   car.lane = target;
-  car.cool = car.prof.cooldown;
-  sim.evLaneChanges.push(sim.time);
-  return true;
+  const aCt = accelInLane(car, target);                       // ego after
+  const aOt = oldFollow ? accelInLane(oldFollow, oldFollow.lane) : 0; // old follower relieved
+  const aNt = newFollow ? accelInLane(newFollow, newFollow.lane) : 0; // new follower after
+  car.lane = savedLane;
+
+  // Hard safety. The ego must arrive into a real pocket — a positive bumper gap
+  // both ahead and behind in the target lane — and the new follower must not be
+  // forced to brake harder than −b_safe. The small MERGE_MARGIN keeps the move
+  // from snapping a car a hair's breadth from its new neighbours (which the
+  // sub-step integrator could momentarily turn into an overlap).
+  const newFollowGap = followerInLane(car, target, N).gap;
+  const leadGapT = leaderInLane(car, target, N).gap;
+  if (aNt < -B_SAFE) return null;
+  if (newFollowGap < MERGE_MARGIN) return null;
+  if (leadGapT < MERGE_MARGIN) return null;
+
+  // Keep-right / left-preference bias (asymmetric MOBIL). Moving right (toward
+  // higher lane index) is rewarded by biasRight; moving left is rewarded by
+  // leftPref (aggressive drivers chase the faster left lanes).
+  let bias = 0;
+  if (target > savedLane) bias += prof.biasRight;   // favour the right move
+  else if (target < savedLane) bias += prof.leftPref - prof.biasRight;
+
+  const incentive = (aCt - aC) + prof.politeness * ((aOt - aO) + (aNt - aN));
+  return incentive + bias - prof.threshold;          // > 0 ⇒ change is worthwhile
 }
 
-function laneChangeStep() {
-  const vm = vmaxEff();
-  // Front-to-back order makes sequential application collision-safe.
-  const order = sim.cars.map((c, i) => i).sort((a, b) => sim.cars[b].cell - sim.cars[a].cell);
-  for (const idx of order) {
-    const car = sim.cars[idx];
-    if (car.cool > 0) { car.cool--; continue; }
-    const prof = car.prof;
+// Animate a lane change: snap the logical lane, but start the visual lateral
+// slide from the old lane so the body is drawn straddling the line for ~1.2 s.
+const LANE_CHANGE_TIME = 1.2;   // seconds for the lateral slide
+function commitLaneChange(car, target) {
+  car.laneFrom = car.laneCoord;   // start slide from where the body currently is
+  car.lane = target;
+  car.laneTo = target;
+  car.laneT = 0;
+  car.cool = 1.2;                 // brief cooldown (s) before the next change
+  sim.evLaneChanges.push(sim.time);
+}
 
-    // Ramp cars: merging left into the rightmost main lane is their only move.
+// One MOBIL pass: every car considers the lane(s) adjacent to it. Forced moves
+// (ramp merge, exiting toward the off-ramp, leaving a vanished lane) take
+// priority over discretionary MOBIL incentive changes.
+function laneChangeStep() {
+  // Reservations made THIS pass, so two cars in different lanes can't both merge
+  // into the same (lane, ~cell) pocket — neither would see the other during
+  // evaluation since both are still in their origin lanes. Keyed by target lane,
+  // holding the committed cells; a move is blocked if it lands within ~1.5 car
+  // lengths of one already reserved.
+  const reserved = new Map();           // lane -> [cells]
+  const ringDist = (a, b) => Math.min(fwd(a, b), fwd(b, a));
+  const slotFree = (lane, cell) => {
+    const arr = reserved.get(lane);
+    if (!arr) return true;
+    return arr.every(c => ringDist(c, cell) > CAR_LEN + MERGE_MARGIN);
+  };
+  const reserve = (lane, cell) => {
+    if (!reserved.has(lane)) reserved.set(lane, []);
+    reserved.get(lane).push(cell);
+  };
+  const doCommit = (car, target) => {
+    if (!slotFree(target, car.cell)) return false;
+    commitLaneChange(car, target);
+    reserve(target, car.cell);
+    return true;
+  };
+
+  for (const car of sim.cars) {
+    if (car.cool > 0) { car.cool -= 1; continue; }
+    if (car.laneT < 1) continue;     // already mid-slide, let it finish
+
+    // Ramp/accel-lane cars: their only move is to merge LEFT into the rightmost
+    // main lane. They use MOBIL safety but a relaxed incentive (they MUST merge
+    // before the wall), and a zipper shape lets them accept a tighter gap.
     if (cfg().hasRamp && car.lane === rampLaneIdx()) {
-      // Zipper shape models alternating priority: mainline implicitly yields,
-      // so the merging car accepts a 1-cell rear gap.
-      const behind = sim.mergeShape === 'zipper' ? 1 : prof.safetyBehind;
-      tryChange(car, idx, sim.lanes - 1, behind);
+      const g = mobilGain(car, sim.lanes - 1);
+      // Force the merge as the wall approaches even if the plain incentive is
+      // marginal, as long as it passed the hard-safety gate (g !== null).
+      const urgency = Math.max(0, rampEnd() - car.cell) < 3 ? 0.5 : 0;
+      if (g !== null && g + urgency > -0.2) doCommit(car, sim.lanes - 1);
       continue;
     }
     if (sim.lanes < 2) continue;
 
-    const gC = effGap(car.lane, car.cell, car.v);
-    const gapIn = (l) => l >= 0 && l < sim.lanes ? effGap(l, car.cell, car.v) : -1;
-
-    // Exiting cars (interchange) always work their way right toward the off-ramp.
+    // Exiting cars (interchange) weave toward the rightmost lane for the ramp.
     if (car.exiting && car.lane < sim.lanes - 1) {
-      if (tryChange(car, idx, car.lane + 1, prof.safetyBehind)) continue;
+      const g = mobilGain(car, car.lane + 1);
+      if (g !== null && g > -0.3 && doCommit(car, car.lane + 1)) continue;
     }
 
-    if (car.profName === 'aggressive') {
-      // Changes whenever a neighboring lane is even 1 cell better; prefers left.
-      for (const t of [car.lane - 1, car.lane + 1]) {
-        if (car.exiting && t < car.lane) continue;
-        if (gapIn(t) >= gC + 1 && tryChange(car, idx, t, prof.safetyBehind)) break;
-      }
+    // Discretionary MOBIL: evaluate both neighbours, take the best positive gain.
+    let bestGain = 0, bestTarget = -1;
+    for (const t of [car.lane - 1, car.lane + 1]) {
+      if (car.exiting && t < car.lane) continue;   // exiters never drift left
+      const g = mobilGain(car, t);
+      if (g !== null && g > bestGain) { bestGain = g; bestTarget = t; }
+    }
+    if (bestTarget >= 0) doCommit(car, bestTarget);
+  }
+}
+
+// Advance the lateral slide animation for every car (called once per tick).
+function advanceLaneAnim(dt) {
+  for (const car of sim.cars) {
+    if (car.laneT < 1) {
+      car.laneT = Math.min(1, car.laneT + dt / LANE_CHANGE_TIME);
+      // Smoothstep for a natural ease-in/out across the line.
+      const e = car.laneT * car.laneT * (3 - 2 * car.laneT);
+      car.laneCoord = car.laneFrom + (car.laneTo - car.laneFrom) * e;
     } else {
-      const threshold = car.profName === 'passive' ? 2 : car.v + 1; // impeded test
-      if (gC < threshold) {
-        // Normal/passive keep-right tendency: try right first, then left.
-        for (const t of [car.lane + 1, car.lane - 1]) {
-          if (car.exiting && t < car.lane) continue;
-          if (gapIn(t) > gC && tryChange(car, idx, t, prof.safetyBehind)) break;
-        }
-      } else if (!car.exiting && car.lane < sim.lanes - 1 &&
-                 gapIn(car.lane + 1) >= vm + 2 && Math.random() < 0.25) {
-        // Unforced keep-right drift when the right lane is comfortably open.
-        tryChange(car, idx, car.lane + 1, prof.safetyBehind);
-      }
+      car.laneCoord = car.lane;
     }
   }
 }
 
-//──────────────────────────── NaSch speed update & movement ────────────────────────────
-// Per car: accelerate → profile headway deceleration → randomize → move.
-// Parallel update: all speeds computed against pre-move positions, then all
-// cars advance, so v ≤ gap guarantees no collisions.
+//──────────────────────────── Longitudinal integration & movement ────────────────────────────
+// Integrate IDM over SUBSTEPS sub-steps (dt = 1/SUBSTEPS s) for each car, then
+// detect sensor crossings, off-ramp exits and right-edge outflow. Open-road
+// model: traffic flows strictly left→right; a car whose position passes the
+// right edge (near cell N) drives off and despawns. prevCell/prevLane are saved
+// for the renderer's inter-tick interpolation.
 function speedAndMoveStep() {
-  const vmf = vmaxFloat();
-  const newV = new Array(sim.cars.length);
-
-  for (let i = 0; i < sim.cars.length; i++) {
-    const car = sim.cars[i];
-    const prof = car.prof;
-    car.age++;
-    // Per-car fractional top speed: limit × personal factor, trucks governed
-    // at TRUCK_VMAX (≈50 mph). Dithered to an integer for this tick so the
-    // time-averaged top speed equals the fractional target (see vmaxFloat()).
-    let vf = vmf * car.speedFactor;
-    if (car.isTruck) vf = Math.min(vf, TRUCK_VMAX);
-    const vmaxCar = ditherV(Math.max(1, vf));
-    const accelEvery = Math.max(prof.accelEvery, car.isTruck ? 2 : 1);
-
-    // 1. Accelerate (passive drivers & trucks only every other tick)
-    let v = car.v;
-    if (car.age % accelEvery === 0) v = Math.min(v + 1, vmaxCar);
-    v = Math.min(v, vmaxCar);
-
-    // 2. Decelerate per profile headway: v = min(v, gap + adj), where
-    //    aggressive adj=+1 (closes in), passive adj=−2 (hangs back).
-    //    Hard floor: never exceed the physical gap.
-    const g = effGap(car.lane, car.cell, v);
-    let des = Math.min(v, Math.max(0, g + prof.headwayAdj));
-    des = Math.min(des, g);
-    // Passive gradual braking: at most −1/tick unless collision-imminent.
-    if (prof.gradual && des < car.v - 1) des = Math.min(car.v - 1, g);
-
-    // 3. Randomize: slow by 1 with profile probability p (+weather penalty)
-    if (des > 0 && Math.random() < pEff(prof)) des--;
-
-    newV[i] = des;
+  // Snapshot prev state for interpolation.
+  for (const car of sim.cars) {
+    car.prevCell = car.cell;
+    car.prevLane = car.laneCoord;   // renderer lerps the CONTINUOUS lane coord
+    car.startV = car.v;
   }
 
-  // 4. Move all cars; detect sensor crossings, off-ramp exits, right-edge exits.
-  // Open-road model: traffic flows strictly left → right. A car that reaches the
-  // right edge (its position wraps from the high cells back toward 0) has driven
-  // off-screen on the right and LEAVES the simulation. Population is replenished
-  // solely by fresh inflow at the LEFT edge (spawnStep), so the on-screen fleet
-  // is a steady stream of new cars rather than an eternal carousel of the same
-  // ones — this is what lets changed settings accumulate as new cars enter left.
+  // Integrate every car's IDM acceleration in lockstep sub-steps. Acceleration
+  // is recomputed each sub-step against current positions; because per-substep
+  // motion is small this stays collision-free without a strict parallel update.
+  for (let s = 0; s < SUBSTEPS; s++) {
+    const acc = new Array(sim.cars.length);
+    for (let i = 0; i < sim.cars.length; i++) {
+      const car = sim.cars[i];
+      acc[i] = accelInLane(car, car.lane);
+    }
+    for (let i = 0; i < sim.cars.length; i++) {
+      const car = sim.cars[i];
+      let v = car.v + acc[i] * SUB_DT;
+      if (v < 0) v = 0;                       // clamp speed ≥ 0 (no reversing)
+      car.v = v;
+      car.cell += v * SUB_DT;
+      // Ring math keeps cell in [0,N); right-edge despawn is detected via wrap.
+      // (We detect the wrap during the post-move scan below.)
+    }
+  }
+
+  // Post-move bookkeeping: braking flag, sensor counts, exits, outflow.
   const remove = new Set();
   for (let i = 0; i < sim.cars.length; i++) {
     const car = sim.cars[i];
-    car.braking = newV[i] < car.v;
-    car.prevCell = car.cell;
-    car.prevLane = car.lane;
-    car.v = newV[i];
-    car.cell = (car.cell + car.v) % N;
+    car.age += 1;
+    car.accel = car.v - car.startV;
+    car.braking = car.v < car.startV - 0.02;       // decelerating ⇒ brake lights
 
-    if (car.v > 0) {
-      const moved = car.v;
-      // Throughput sensor at cell 150
-      const dSensor = (SENSOR_CELL - car.prevCell + N) % N;
-      if (dSensor >= 1 && moved >= dSensor) sim.evThroughput.push(sim.time);
-      if (cfg().hasOffRamp) {
-        // Commit/re-roll the exit decision once per lap, upstream of the ramp.
-        const dDecide = (EXIT_DECIDE_CELL - car.prevCell + N) % N;
-        if (dDecide >= 1 && moved >= dDecide) car.exiting = Math.random() < car.exitChance;
-        // Off-ramp: an exiting car in the rightmost lane departs and respawns
-        // via the on-ramp queue; one that missed the gore point gives up.
-        const dExit = (cfg().offRampCell - car.prevCell + N) % N;
-        if (car.exiting && dExit >= 1 && moved >= dExit) {
-          if (car.lane === sim.lanes - 1) { remove.add(i); sim.rampQueue++; continue; }
-          car.exiting = false; // missed the exit — try again next lap
-        }
+    // Did the car pass the right edge this tick? Detect via ring wrap: its
+    // continuous cell exceeded N during integration.
+    let wrapped = false;
+    if (car.cell >= N) { car.cell -= N; wrapped = true; }
+
+    const prev = car.prevCell;
+    const movedDist = wrapped ? (car.cell + N - prev) : (car.cell - prev);
+
+    // Throughput sensor crossing: counted when the car advanced past the sensor
+    // cell this tick (forward distance to it ≤ distance travelled).
+    const dSensor = fwd(prev, SENSOR_CELL);
+    if (movedDist > 0 && dSensor > 0 && dSensor <= movedDist) sim.evThroughput.push(sim.time);
+
+    if (cfg().hasOffRamp) {
+      // Commit/re-roll the exit decision upstream of the ramp.
+      const dDecide = fwd(prev, EXIT_DECIDE_CELL);
+      if (!car.exitDecided && movedDist >= dDecide && dDecide >= 0) {
+        car.exiting = Math.random() < car.exitChance;
+        car.exitDecided = true;
       }
-      // Right-edge outflow: any car that crossed the seam this tick has exited
-      // on the right and despawns (main-lane traffic only — ramp/accel-lane cars
-      // are still merging and shouldn't vanish mid-merge before reaching a lane).
-      if (car.cell < car.prevCell && (!cfg().hasRamp || car.lane < sim.lanes)) remove.add(i);
-    } else if (car.prevCell !== car.cell || newV[i] === 0) {
-      // Stop event (city metric): car came to a halt this tick.
-      if (car.braking && car.v === 0) sim.evStops.push(sim.time);
+      // Off-ramp departure: an exiting car in the rightmost lane peels off.
+      const dExit = fwd(prev, cfg().offRampCell);
+      if (car.exiting && movedDist >= dExit && dExit >= 0 && !wrapped) {
+        if (car.lane === sim.lanes - 1) { remove.add(i); sim.rampQueue++; continue; }
+      }
     }
+
+    // Stop event (city metric): came to rest this tick at/near a light.
+    if (car.v < 0.05 && car.startV >= 0.05) sim.evStops.push(sim.time);
+
+    // Right-edge outflow: main-lane cars that wrapped past the seam have exited.
+    // Ramp/accel-lane cars are still merging and are kept until they reach a
+    // main lane (they can't realistically wrap before merging on this short ring,
+    // but guard anyway).
+    if (wrapped && (!cfg().hasRamp || car.lane < sim.lanes)) remove.add(i);
   }
   if (remove.size) sim.cars = sim.cars.filter((_, i) => !remove.has(i));
-  buildGrid();
 }
 
 //──────────────────────────── Spawning / ramp meter ────────────────────────────
-// Open-road inflow. New cars enter from the LEFT edge for every scenario and
-// flow rightward; the right-edge outflow in speedAndMoveStep removes them when
-// they reach the far side. The inflow rate is proportional to the remaining
-// deficit (target − current population) so the road fills GRADUALLY from empty
-// at reset, climbs toward effTarget() at a believable few-cars-per-second pace,
-// then holds near target (deficit→0 ⇒ inflow→0). Because makeCar reads the
-// CURRENT sliders, the stream entering on the left always reflects the latest
-// settings, and the on-screen mix shifts over time as old cars exit on the
-// right and new ones arrive on the left.
+// Open-road inflow: fresh cars enter from the LEFT edge for every scenario and
+// flow rightward; right-edge outflow removes them at the far side. Inflow scales
+// with the population deficit (target − current) so the road fills GRADUALLY
+// from empty, climbs toward effTarget() at a believable pace, then holds. Because
+// makeCar reads the CURRENT sliders, the left-edge stream always reflects the
+// latest settings; the on-screen mix shifts as old cars exit right.
 function spawnStep() {
   const target = effTarget();
 
   if (cfg().hasRamp) {
-    // Highway/interchange: the metered on-ramp is a SECONDARY inflow. It keeps a
-    // modest standing queue (so the meter and merge always have something to do)
-    // but no longer carries the whole population — the left edge is primary.
-    // The standing queue is capped at a handful of cars: it must never absorb
-    // the whole population deficit, or it would starve the left-edge inflow
-    // (spawnLeftEdge counts queued cars toward the target) while the ramp can
-    // only release one car per tick — capping the road far below target.
+    // Metered on-ramp as a SECONDARY inflow with a small standing queue.
     const pop = sim.cars.length;
     const want = Math.min(6, Math.max(0, target - pop));
     if (sim.rampQueue < want && Math.random() < 0.5) sim.rampQueue++;
-    else if (sim.rampQueue > want) sim.rampQueue = want; // slider dropped: drain off-road queue
+    else if (sim.rampQueue > want) sim.rampQueue = want;
 
     const entry = rampStart();
-    const entryFree = cellFree(rampLaneIdx(), entry);
+    const entryFree = laneEntryFree(rampLaneIdx(), entry, 2.2);
     if (sim.meterOn) {
       sim.meterTimer++;
       if (sim.meterTimer >= sim.meterInterval && sim.rampQueue > 0 && entryFree) {
@@ -891,62 +1047,60 @@ function spawnStep() {
         releaseRampCar(entry);
       }
     } else if (sim.rampQueue > 0 && entryFree) {
-      releaseRampCar(entry); // free merging: one per tick as space allows
+      releaseRampCar(entry);
     }
   }
 
-  // Primary inflow at the left edge (all scenarios). Drives the population
-  // toward target gradually: closes a small fraction of the deficit per tick,
-  // then holds (deficit→0 ⇒ inflow→0). Surplus, when the slider drops, simply
-  // drains out the right edge as cars reach the far side — never yanked from
-  // mid-road. So convergence is fully handled by left inflow + right outflow.
   spawnLeftEdge(target);
 }
 
-// Inject fresh cars at the leftmost cells, never over target and never
-// over-packed. Rate scales with the deficit so a 0→target fill takes a few
-// seconds rather than happening instantly; once near target the rate falls to a
-// trickle that just replaces the cars leaving on the right.
+// Is there a clear pocket (≥ minGap cells of clear road ahead, and nothing
+// straddling the entry point) at `cell` in `lane` for a fresh insertion?
+function laneEntryFree(lane, cell, minGap) {
+  for (const o of sim.cars) {
+    if (o.lane !== lane) continue;
+    const ahead = fwd(cell, o.cell);          // o is ahead of the entry
+    const behind = fwd(o.cell, cell);         // o is behind the entry
+    if (ahead < minGap + CAR_LEN) return false;
+    if (behind < CAR_LEN) return false;        // something on top of the entry
+  }
+  return true;
+}
+
+// Inject fresh cars at the leftmost cells. Rate scales with the deficit so a
+// 0→target fill takes a few seconds; near target it falls to a trickle that
+// just replaces cars leaving on the right.
 function spawnLeftEdge(target) {
-  // Cars already queued/merging on the ramp count toward the target so the two
-  // inflows don't overshoot together.
   const queued = cfg().hasRamp ? sim.rampQueue : 0;
   let deficit = target - sim.cars.length - queued;
   if (deficit <= 0) return;
-  // Close ~1/8 of the deficit per tick, at least 1, capped per tick so even a
-  // full 0→target jump ramps in believably (≈ a few cars/sec) without shocking
-  // the lead vehicles. With ~5 ticks/sec this is a steady left-edge stream.
   let budget = Math.min(sim.lanes, Math.max(1, Math.ceil(deficit / 8)));
-  // Shuffle lane order so inflow spreads across lanes rather than favoring lane 0.
   const lanes = [...Array(sim.lanes).keys()].sort(() => Math.random() - 0.5);
   for (const l of lanes) {
     if (budget <= 0) break;
-    // Require a clear pocket at the entrance so the insertion is collision-safe
-    // (entry speed is capped by the gap ahead, preserving v ≤ gap).
-    if (!cellFree(l, 0)) continue;
-    const ahead = gapAhead(l, 0, 6);
-    if (ahead < 2) continue; // leave breathing room behind the previous arrival
-    const car = makeCar(l, 0, Math.max(1, Math.min(vmaxEff(), ahead)));
+    if (!laneEntryFree(l, 0, 2.5)) continue;   // need breathing room
+    // Entry speed: the desired free speed, capped by the gap ahead so the new
+    // car doesn't immediately overrun its leader.
+    const r = leaderInLane({ lane: l, cell: 0, v: 0, prof: PROFILES.normal, isTruck: false, speedFactor: 1 }, l, N);
+    const car = makeCar(l, 0, Math.max(0.5, Math.min(vmaxFloat(), r.gap)));
     sim.cars.push(car);
-    sim.grid[l][0] = sim.cars.length - 1;
     budget--;
   }
 }
 
 function releaseRampCar(entry) {
-  const car = makeCar(rampLaneIdx(), entry, 1); // re-rolls profile & exit chance
+  const car = makeCar(rampLaneIdx(), entry, 0.8);  // re-rolls profile & exit chance
   sim.cars.push(car);
-  sim.grid[rampLaneIdx()][entry] = sim.cars.length - 1;
   sim.rampQueue--;
 }
 
 //──────────────────────────── Sim tick ────────────────────────────
 function tick() {
   sim.time++;
-  buildGrid();
-  laneChangeStep();
-  speedAndMoveStep();
-  spawnStep();
+  laneChangeStep();        // MOBIL: decide lane changes (snaps lane, starts slide)
+  advanceLaneAnim(1);      // advance the lateral slide animation by one second
+  speedAndMoveStep();      // IDM: integrate longitudinal motion & handle exits
+  spawnStep();             // open-road inflow at the left edge (+ ramp)
   // Trim rolling event logs to the last 2 minutes of sim time.
   const cut = sim.time - 120;
   for (const k of ['evThroughput', 'evLaneChanges', 'evStops']) {
@@ -974,8 +1128,51 @@ function resetSim() {
   // Road starts empty: no pre-seeding. spawnLeftEdge() builds the population up
   // from zero toward effTarget() as the sim runs, entering from the left edge.
   if (cfg().style === 'city') genBuildings();
-  buildGrid();
   sim.lastTickWall = performance.now();
+}
+
+// Change the number of main lanes IN PLACE, without clearing the fleet.
+//   • Increasing: just widen the road. Existing cars stay put; they migrate into
+//     the new emptier lane over the next seconds via MOBIL (path of least
+//     resistance). New left-edge arrivals may use any lane.
+//   • Decreasing: relocate any car now in a vanished lane (index ≥ n) into the
+//     nearest still-valid lane, picking a safe gap when one exists; otherwise it
+//     is dropped onto the edge lane and merges as soon as IDM/MOBIL allow (it
+//     will simply slot in — no hard delete). The ramp/accel lane follows
+//     sim.lanes automatically (rampLaneIdx === sim.lanes).
+function applyLaneCount(n) {
+  const opts = cfg().laneOptions;
+  if (!opts.includes(n)) n = cfg().defaultLanes;
+  const old = sim.lanes;
+  if (n === old) { sim.lanes = n; updateLabels(); return; }
+
+  if (n < old) {
+    // Move cars out of lanes that will no longer exist (lane index ≥ n).
+    for (const car of sim.cars) {
+      let lane = car.lane;
+      // A ramp/accel-lane car (index === old) maps onto the new ramp lane (n).
+      if (cfg().hasRamp && lane === old) { car.lane = n; car.laneFrom = car.laneTo = car.laneCoord = n; continue; }
+      if (lane < n) continue;            // still valid
+      // Find the nearest valid lane (search inward) that has a safe pocket.
+      let placed = -1;
+      for (let t = n - 1; t >= 0; t--) {
+        const probe = { lane: car.lane, cell: car.cell };
+        const aheadGap = leaderInLane({ ...probe, v: car.v }, t, N).gap;
+        const behindGap = followerInLane({ ...probe }, t, N).gap;
+        if (aheadGap > 0.2 && behindGap > 0.2) { placed = t; break; }
+      }
+      if (placed < 0) placed = n - 1;    // no safe gap: drop onto edge lane, IDM sorts it out
+      car.lane = placed;
+      car.laneFrom = car.laneTo = car.laneCoord = placed;
+      car.laneT = 1;
+    }
+  }
+
+  sim.lanes = n;
+  // Rebuild lane-indexed structures and force the static scene to redraw at the
+  // new width (the render loop keys off sim.lanes in its signature).
+  sceneSig = '';
+  updateLabels();
 }
 
 // Deterministic pseudo-random skyline for the city backdrop.
@@ -1602,7 +1799,7 @@ function buildCityStatic(g) {
 
   // streetlights: curved poles with warm light pools on the roadway,
   // mirrored on the far side to match the mirrored skyline
-  for (const [cell, side] of [[25, 0], [85, 0], [145, 0], [55, 1], [130, 1], [185, 1]]) {
+  for (const [cell, side] of [[10, 0], [36, 0], [61, 0], [23, 1], [55, 1], [78, 1]]) {
     const x = cell * c;
     const by = side ? top + rh + 3 : top - 3;          // base at the curb
     const dir = side ? 1 : -1;                         // pole extends off-road
@@ -1684,11 +1881,14 @@ function drawCars(a) {
   const blink = Math.floor(performance.now() / 400) % 2 === 0;
   for (const car of sim.cars) {
     const pos = lerpPos(car, a);
-    const laneF = car.prevLane + (car.lane - car.prevLane) * a;
+    // Lerp the CONTINUOUS lane coordinate (prev → current) so a MOBIL lane
+    // change is drawn straddling the line as the body slides across.
+    const laneF = car.prevLane + (car.laneCoord - car.prevLane) * a;
     const x = pos * c;
     const y = top + laneF * LANE_H + LANE_H / 2;
+    // len = body length in px along travel; trucks longer than cars.
     if (car.isTruck) drawTruck(car, x, y, c * 1.15, blink);
-    else drawCar(car, x, y, c * 0.85, blink);
+    else drawCar(car, x, y, c * 0.9, blink);
   }
 }
 
@@ -1920,7 +2120,8 @@ function bindUI() {
   });
   $('cars').addEventListener('input', e => { sim.targetCars = +e.target.value; updateLabels(); });
   $('speed').addEventListener('input', e => { sim.speedMph = +e.target.value; updateLabels(); });
-  $('lanes').addEventListener('change', e => { sim.lanes = +e.target.value; updateLabels(); resetSim(); });
+  // Lane add/remove changes the road IN PLACE — never resets the running sim.
+  $('lanes').addEventListener('change', e => { applyLaneCount(+e.target.value); });
   // Mix sliders affect only cars spawned afterwards (makeCar reads the current
   // sliders); existing vehicles keep the profile/truck/colour they were born
   // with, so the on-screen composition shifts gradually as the fleet turns over.
