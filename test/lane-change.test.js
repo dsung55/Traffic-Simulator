@@ -75,18 +75,21 @@ test('discretionary plans time out (patience) when the target lane stays blocked
   // queue; lane 1 has a tempting pocket AHEAD of it (strong MOBIL incentive)
   // but a stopped follower 0.3 cells behind, which fails gapCheck's rear-gap
   // requirement every tick. Ego must signal, wait out its patience, give up.
+  // (Queue gaps sit at/below each profile's standstill s0 — now a realistic
+  // 2–4 m — so the stopped queue doesn't creep during the test.)
   resetWorld({ scenario: 'city', lanes: 2, speedMph: 35 });
   sim.time = 35; // cycle 60 => red from t=34 to t=60; the whole test stays red
-  // Lane 0 queue at the light (cell 21): ego boxed at a 0.5-cell gap.
-  placeCar({ lane: 0, cell: 19.2, v: 0 });
-  placeCar({ lane: 0, cell: 16.6, v: 0 });
-  const ego = placeCar({ lane: 0, cell: 14.6, v: 0, prof: 'aggressive' });
-  placeCar({ lane: 0, cell: 11.2, v: 0 });
+  // Lane 0 queue at the light (cell 21): ego boxed at a 0.3-cell gap.
+  placeCar({ lane: 0, cell: 19.1, v: 0 });
+  placeCar({ lane: 0, cell: 17.25, v: 0 });
+  const ego = placeCar({ lane: 0, cell: 15.45, v: 0, prof: 'aggressive' });
+  placeCar({ lane: 0, cell: 12.0, v: 0 });
   // Lane 1 queue: pocket ahead of ego (gap 0.7 > the ~0.56 it needs ahead),
-  // follower 0.3 behind (< the 0.5 it needs behind => blocked forever).
-  placeCar({ lane: 1, cell: 19.0, v: 0 });
-  placeCar({ lane: 1, cell: 16.8, v: 0 });
-  placeCar({ lane: 1, cell: 12.8, v: 0, prof: 'passive' });
+  // follower 0.3 behind (< the 0.5 it needs behind => blocked forever; the
+  // passive follower also yields for the blinker, so it stays put).
+  placeCar({ lane: 1, cell: 17.65, v: 0 });
+  placeCar({ lane: 1, cell: 13.65, v: 0, prof: 'passive' });
+  placeCar({ lane: 1, cell: 11.0, v: 0, prof: 'passive' });
   let signalled = false, gaveUp = false;
   for (let i = 0; i < 20; i++) {
     tick();

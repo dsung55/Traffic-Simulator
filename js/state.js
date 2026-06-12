@@ -37,8 +37,10 @@ function rampLaneIdx() { return sim.lanes; }                  // accel lane sits
 function rampLen() { return MERGE_SHAPES[sim.mergeShape].len; }
 function rampStart() { return cfg().onRampCell; }
 function rampEnd() { return cfg().onRampCell + rampLen() - 1; } // last usable accel-lane cell
-// Jam spacing per vehicle is now len (≈1.5 cells) + s0 (≈1.4), so the road
-// physically holds ~N/3 vehicles per lane; cap a little under that.
+// Jam spacing per vehicle is len (≈1.5 cells ≈ 11 m) + s0 (≈0.4 cells ≈ 3 m),
+// matching real stopped-queue spacing of ~7–8 m per car-length-equivalent;
+// the road could physically hold ~N/2 vehicles per lane, but we cap density
+// well below jam so the simulation stays in the interesting flowing regimes.
 function densityCap() { return Math.floor(sim.lanes * N * 0.30); }
 function effTarget() { return Math.min(sim.targetCars, densityCap()); }
 
@@ -69,9 +71,12 @@ function carV0(car) {
   if (car.isTruck) v0 = Math.min(v0, TRUCK_OVERRIDE.v0Cap);
   return Math.max(0.5, v0);
 }
-// Weather stiffens following: longer headway + stronger braking in rain/fog.
+// Weather stiffens following: longer headway + a larger minimum gap in
+// rain/fog. Empirically drivers add ~10–30% headway in rain/low visibility
+// (often less than they should); +0.13 cells ≈ 1 m, +0.27 cells ≈ 2 m of
+// extra standstill buffer, in scale with the calibrated s0 of 2–4 m.
 function weatherTfactor() { return sim.weather === 'clear' ? 1 : sim.weather === 'rain' ? 1.15 : 1.3; }
-function weatherS0add() { return sim.weather === 'clear' ? 0 : sim.weather === 'rain' ? 0.3 : 0.5; }
+function weatherS0add() { return sim.weather === 'clear' ? 0 : sim.weather === 'rain' ? 0.13 : 0.27; }
 
 export {
   sim, cfg, offRampActive, rampLaneIdx, rampLen, rampStart, rampEnd,
