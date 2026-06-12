@@ -1,5 +1,6 @@
 // Mutable simulation state plus the small derived helpers everything reads.
 import { SCENARIOS, MERGE_SHAPES, N, MPH_PER_CELL, TRUCK_OVERRIDE } from './config.js';
+import { rng } from './rng.js';
 
 //──────────────────────────── State ────────────────────────────
 const sim = {
@@ -57,9 +58,9 @@ function vmaxFloat() {
 }
 // Stable per-car desired-speed multiplier, drawn once per profile assignment.
 function rollSpeedFactor(profName) {
-  if (profName === 'aggressive') return 1.02 + Math.random() * 0.06; // a touch over
-  if (profName === 'passive')    return 0.94 + Math.random() * 0.05; // a touch under
-  return 0.98 + Math.random() * 0.04;                                // ≈ at the limit
+  if (profName === 'aggressive') return 1.02 + rng() * 0.06; // a touch over
+  if (profName === 'passive')    return 0.94 + rng() * 0.05; // a touch under
+  return 0.98 + rng() * 0.04;                                // ≈ at the limit
 }
 // Per-car desired free-flow speed v0 (cells/s): posted limit × profile × personal,
 // capped for trucks. Weather already folded into vmaxFloat().

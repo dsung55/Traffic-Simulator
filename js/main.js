@@ -16,12 +16,18 @@
 
 import { TICK_MS } from './config.js';
 import { sim } from './state.js';
-import { tick, resetSim } from './engine.js';
-import { render, resizeCanvas } from './render.js';
-import { bindUI, syncControls, updateMetrics, updateInspector } from './ui.js';
+import { tick, resetSim, setEngineHooks } from './engine.js';
+import { render, resizeCanvas, invalidateScene } from './render.js';
+import {
+  bindUI, syncControls, updateMetrics, updateInspector, selectCar, updateLabels,
+} from './ui.js';
 
 //──────────────────────────── Loops ────────────────────────────
 function start() {
+  // Wire the engine's presentation hooks to the real UI/render callbacks. The
+  // engine itself imports neither layer (no cycle, no DOM dependency); this is
+  // the single seam where they meet.
+  setEngineHooks({ selectCar, updateLabels, invalidateScene });
   bindUI();
   syncControls();
   resizeCanvas();

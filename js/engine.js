@@ -1,8 +1,8 @@
 // Simulation engine: traffic lights, vehicles, gap queries, IDM car-following,
 // MOBIL lane changes (signal / gap-wait / steer-over state machine), the
-// longitudinal integrator, spawning and the per-second tick. No DOM access
-// except via the imported UI hooks (selectCar / updateLabels) and the render
-// layer's scene invalidator.
+// longitudinal integrator, spawning and the per-second tick. No DOM access and
+// no UI/render imports: presentation is reached only through the injectable
+// `hooks` (selectCar / updateLabels / invalidateScene), wired by main.js.
 import {
   N, SUBSTEPS, SUB_DT, SENSOR_CELL, INCIDENT_CELL, EXIT_DECIDE_CELL,
   CAR_LEN, TRUCK_LEN, PROFILES, TRUCK_OVERRIDE, B_SAFE, MERGE_MARGIN,
@@ -11,8 +11,19 @@ import {
   sim, cfg, offRampActive, rampLaneIdx, rampStart, rampEnd,
   effTarget, vmaxFloat, rollSpeedFactor, carV0, weatherTfactor, weatherS0add,
 } from './state.js';
-import { selectCar, updateLabels } from './ui.js';
-import { invalidateScene } from './render.js';
+import { rng } from './rng.js';
+
+// Injectable presentation hooks. The engine never imports the UI/render layers
+// directly (that would form an import cycle and drag the DOM into every engine
+// import); instead main.js wires the real callbacks in via setEngineHooks at
+// startup. They default to no-ops so the engine — and its pure simulation
+// math — can be imported and exercised in a plain Node process with no DOM.
+const hooks = {
+  selectCar() {},        // surface a clicked car in the inspector (or clear it)
+  updateLabels() {},     // refresh slider/value labels after a structural change
+  invalidateScene() {},  // force the static render layer to rebuild
+};
+function setEngineHooks(h) { Object.assign(hooks, h); }
 
 //──────────────────────────── Traffic lights (city) ────────────────────────────
 // Cycle split scales the default 30/4/26 s proportions to the slider value.
@@ -38,13 +49,13 @@ function lightState(i) {
 
 //──────────────────────────── Cars ────────────────────────────
 function rollProfile(isTruck) {
-  const r = Math.random() * 100;
+  const r = rng() * 100;
   let name = r < sim.pctAgg ? 'aggressive' : r < sim.pctAgg + sim.pctPas ? 'passive' : 'normal';
   if (isTruck && name === 'aggressive') name = 'normal'; // trucks are never aggressive
   return name;
 }
 function carColor(profName, isTruck) {
-  const h = (a, b) => a + Math.random() * (b - a);
+  const h = (a, b) => a + rng() * (b - a);
   if (isTruck) return `hsl(${h(22, 48)},${h(12, 22)}%,${h(58, 74)}%)`;       // tan rigs
   if (profName === 'aggressive') return `hsl(${(h(-8, 14) + 360) % 360},${h(68, 88)}%,${h(48, 60)}%)`; // hot red
   if (profName === 'passive')    return `hsl(${h(205, 232)},${h(38, 56)}%,${h(54, 68)}%)`; // cool blue
@@ -54,7 +65,7 @@ function carColor(profName, isTruck) {
 // here from the CURRENT slider values and then persist for the car's entire
 // life — slider changes only affect cars spawned afterwards, never this one.
 function makeCar(lane, cell, v) {
-  const isTruck = Math.random() * 100 < sim.pctTrucks;
+  const isTruck = rng() * 100 < sim.pctTrucks;
   const profName = rollProfile(isTruck);
   // Build the effective IDM/MOBIL parameter set: base profile, then truck
   // overrides merged on top. Stored per-car so slider changes never mutate it.
@@ -63,11 +74,11 @@ function makeCar(lane, cell, v) {
   // Interchange: each car gets a permanent random 15–30% chance of taking the
   // off-ramp; it rolls that chance once upstream of the ramp, then weaves right.
   const exitChance = offRampActive()
-    ? Math.min(0.9, (sim.exitPct / 100) * (0.75 + Math.random() * 0.5))
+    ? Math.min(0.9, (sim.exitPct / 100) * (0.75 + rng() * 0.5))
     : 0;
   // Physical length in cells (small per-vehicle variance around the baselines).
-  const len = isTruck ? TRUCK_LEN * (0.92 + Math.random() * 0.18)
-                      : CAR_LEN * (0.93 + Math.random() * 0.16);
+  const len = isTruck ? TRUCK_LEN * (0.92 + rng() * 0.18)
+                      : CAR_LEN * (0.93 + rng() * 0.16);
   return {
     id: sim.nextId++, lane, cell, v, len,
     prevCell: cell, prevLane: lane, startV: v,
@@ -80,7 +91,7 @@ function makeCar(lane, cell, v) {
     yieldFor: null, closeGap: false,  // per-tick cooperation flags (set in yieldPass)
     profName, prof, isTruck,
     speedFactor: rollSpeedFactor(profName),
-    exitChance, exiting: Math.random() < exitChance, exitDecided: false,
+    exitChance, exiting: rng() < exitChance, exitDecided: false,
     cool: 0, age: 0, braking: false, accel: 0,
     color: carColor(profName, isTruck),
   };
@@ -338,7 +349,7 @@ function startSignal(car, target, forced) {
     target, dir: Math.sign(target - car.lane), phase: 'signal',
     t: 0, wait: 0, forced, from: car.lane,
     sigTime: (forced ? Math.min(1, car.prof.signalTime) : car.prof.signalTime) *
-             (0.8 + Math.random() * 0.4),
+             (0.8 + rng() * 0.4),
   };
   car.signal = car.lc.dir;
 }
@@ -416,7 +427,7 @@ function laneChangeStep() {
       if (lc.t < lc.sigTime) continue;        // minimum blink time not served yet
       // …or after waiting too long for a gap that never comes.
       if (!lc.forced && ++lc.wait > car.prof.patience) {
-        cancelLC(car, 3 + Math.floor(Math.random() * 3));
+        cancelLC(car, 3 + Math.floor(rng() * 3));
         continue;
       }
       const urgency = lcUrgency(car);
@@ -503,7 +514,7 @@ function advanceLaneAnim(dt) {
           // exiters mid-weave, who may need the next lane right away.
           car.cool = car.lc.phase === 'abort' ? 4
                    : car.exiting ? 1
-                   : 4 + Math.floor(Math.random() * 5);
+                   : 4 + Math.floor(rng() * 5);
           car.lc = null;
         }
       }
@@ -590,7 +601,7 @@ function speedAndMoveStep() {
       // Commit/re-roll the exit decision upstream of the ramp.
       const dDecide = fwd(prev, EXIT_DECIDE_CELL);
       if (!car.exitDecided && movedDist >= dDecide && dDecide >= 0) {
-        car.exiting = Math.random() < car.exitChance;
+        car.exiting = rng() < car.exitChance;
         car.exitDecided = true;
       }
       // Off-ramp departure: an exiting car in the rightmost lane peels off. One
@@ -631,7 +642,7 @@ function spawnStep() {
     // Metered on-ramp as a SECONDARY inflow with a small standing queue.
     const pop = sim.cars.length;
     const want = Math.min(6, Math.max(0, target - pop));
-    if (sim.rampQueue < want && Math.random() < 0.5) sim.rampQueue++;
+    if (sim.rampQueue < want && rng() < 0.5) sim.rampQueue++;
     else if (sim.rampQueue > want) sim.rampQueue = want;
 
     const entry = rampStart();
@@ -670,7 +681,7 @@ function spawnLeftEdge(target) {
   let deficit = target - sim.cars.length - queued;
   if (deficit <= 0) return;
   let budget = Math.min(sim.lanes, Math.max(1, Math.ceil(deficit / 8)));
-  const lanes = [...Array(sim.lanes).keys()].sort(() => Math.random() - 0.5);
+  const lanes = [...Array(sim.lanes).keys()].sort(() => rng() - 0.5);
   for (const l of lanes) {
     if (budget <= 0) break;
     if (!laneEntryFree(l, 0, 4.5)) continue;   // need breathing room (truck-sized)
@@ -735,7 +746,7 @@ function tick() {
 // fills from spawnStep, so the highway/interchange on-ramp behaves the same way.
 function resetSim() {
   sim.cars = [];
-  selectCar(null);
+  hooks.selectCar(null);
   sim.rampQueue = 0;
   sim.meterTimer = 0;
   sim.time = 0;
@@ -761,7 +772,7 @@ function applyLaneCount(n) {
   const opts = cfg().laneOptions;
   if (!opts.includes(n)) n = cfg().defaultLanes;
   const old = sim.lanes;
-  if (n === old) { sim.lanes = n; updateLabels(); return; }
+  if (n === old) { sim.lanes = n; hooks.updateLabels(); return; }
 
   if (n < old) {
     // Move cars out of lanes that will no longer exist (lane index ≥ n).
@@ -799,8 +810,8 @@ function applyLaneCount(n) {
   sim.lanes = n;
   // Rebuild lane-indexed structures and force the static scene to redraw at the
   // new width (the render loop keys off sim.lanes in its signature).
-  invalidateScene();
-  updateLabels();
+  hooks.invalidateScene();
+  hooks.updateLabels();
 }
 
 // Deterministic pseudo-random skyline for the city backdrop.
@@ -824,7 +835,8 @@ function genBuildings() {
 }
 
 export {
+  setEngineHooks,
   lightPhases, lightOffset, lightState, makeCar, fwd, occupiesLane,
-  leaderInLane, followerInLane, leaderGap, tick, resetSim, applyLaneCount,
-  genBuildings,
+  leaderInLane, followerInLane, leaderGap, idmAccel, accelInLane,
+  tick, resetSim, applyLaneCount, genBuildings,
 };
