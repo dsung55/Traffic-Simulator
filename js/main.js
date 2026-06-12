@@ -7,7 +7,7 @@
  *   ~1.5 cells for cars, ~3.75 for trucks) used by every gap computation.
  * Longitudinal motion is the Intelligent Driver Model (IDM); lane changes are
  * MOBIL-motivated but run a realistic phase machine (signal → wait for a safe
- * gap, with cooperative yielding → smooth 2.6 s steer-over, abortable). Each tick
+ * gap, with cooperative yielding → smooth ~4.5 s steer-over, abortable). Each tick
  * integrates IDM over SUBSTEPS sub-steps (dt = 1/SUBSTEPS s) for stability and
  * advances sim.time by 1 (= one simulated second). The sim advances on a fixed
  * 200 ms wall-clock interval; rendering runs at 60 fps via requestAnimationFrame

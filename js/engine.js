@@ -85,6 +85,7 @@ function makeCar(lane, cell, v) {
     prevCell: cell, prevLane: lane, startV: v,
     laneCoord: lane,          // CONTINUOUS lane coordinate (renderer reads this for y)
     laneFrom: lane, laneTo: lane, laneT: 1, // lane-change animation state (laneT in [0,1])
+    prevLaneT: 1,             // laneT at the last snapshot (renderer-only, for exact S-curve)
     lane2: null,              // secondary lane occupied while straddling the line
     lc: null,                 // lane-change plan { target, dir, phase, t, wait, sigTime, forced, from }
     signal: 0,                // blinker: -1 left (screen-up), +1 right (screen-down), 0 off
@@ -793,6 +794,7 @@ function snapshotPrev() {
   for (const car of sim.cars) {
     car.prevCell = car.cell;
     car.prevLane = car.laneCoord;   // renderer lerps the CONTINUOUS lane coord
+    car.prevLaneT = car.laneT;      // lets the renderer evaluate the exact S-curve
     car.prevTilt = car.tilt;
     car.startV = car.v;
   }
@@ -912,7 +914,7 @@ function genBuildings() {
 }
 
 export {
-  setEngineHooks,
+  setEngineHooks, LANE_CHANGE_TIME,
   lightPhases, lightOffset, lightState, makeCar, fwd, occupiesLane,
   leaderInLane, followerInLane, leaderGap, idmAccel, accelInLane,
   tick, resetSim, applyLaneCount, genBuildings,
