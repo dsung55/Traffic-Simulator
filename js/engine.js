@@ -289,7 +289,7 @@ function accelInLane(car, lane, skipWall) {
 //             courteous followers in the target lane ease off to open the gap
 //             (yieldPass), aggressive ones may close it instead. Discretionary
 //             attempts give up after prof.patience seconds.
-//   EXECUTE : the lateral slide takes LANE_CHANGE_TIME (~2.6 s) on a smoothstep
+//   EXECUTE : the lateral slide takes LANE_CHANGE_TIME (~4.5 s) on a smoothstep
 //             curve, the body visibly steering over (car.tilt). From the first
 //             moment it occupies BOTH lanes: target-lane traffic treats it as a
 //             leader immediately, old-lane traffic until it is mostly across,
