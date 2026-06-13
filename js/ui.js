@@ -216,6 +216,17 @@ function updateLabels() {
   paintAllRanges();
 }
 
+// Wire a collapsible-bar handle: clicking toggles `cls` on <body> and reflects
+// the new state onto the button's aria-expanded.
+function bindBarToggle(btnId, cls) {
+  const btn = $(btnId);
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const open = document.body.classList.toggle(cls);
+    btn.setAttribute('aria-expanded', String(open));
+  });
+}
+
 function bindUI() {
   $('scenario').addEventListener('change', e => {
     sim.scenario = e.target.value; syncControls(); resetSim();
@@ -262,6 +273,12 @@ function bindUI() {
     updatePauseUI();
   });
   $('btnReset').addEventListener('click', resetSim);
+
+  // Collapsible bars (mobile): each handle flips a body class the CSS keys off
+  // of, and mirrors the open state onto aria-expanded for assistive tech. On
+  // desktop these handles are hidden, so the listeners simply never fire.
+  bindBarToggle('ctlToggle', 'controls-open');
+  bindBarToggle('metricsToggle', 'metrics-open');
 
   // Micro-interactions shared by every range input: filled-track repaint
   // and a brief highlight of the value pill while scrubbing.

@@ -30,8 +30,9 @@ dependencies.
 | `js/state.js` | The mutable `sim` state object + small derived helpers |
 | `js/engine.js` | Simulation: IDM, MOBIL lane-change state machine, integration, spawning, tick |
 | `js/rng.js` | Random source: `Math.random` in the app, seedable for deterministic tests |
-| `js/render.js` | Canvas renderer (static scene + dynamic layers), camera, pointer input |
-| `js/ui.js` | Control wiring, live metrics, sparkline, vehicle inspector |
+| `js/render.js` | Canvas renderer (static scene + dynamic layers), camera, pointer input (mouse, pen, multi-touch pinch/pan) |
+| `js/ui.js` | Control wiring, live metrics, sparkline, vehicle inspector, collapsible-bar toggles |
+| `js/device.js` | Mobile/desktop detection → `is-mobile`/`is-desktop` body classes that drive the responsive layout |
 | `js/dom.js` | Tiny shared DOM helpers |
 | `js/main.js` | Entry point: wires everything, injects the engine's UI hooks, starts the loops |
 
