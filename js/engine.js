@@ -6,9 +6,10 @@
 import {
   N, SUBSTEPS, SUB_DT, SENSOR_CELL, INCIDENT_CELL, EXIT_DECIDE_CELL,
   CAR_LEN, TRUCK_LEN, PROFILES, TRUCK_OVERRIDE, B_SAFE, MERGE_MARGIN,
+  EXIT_RAMP_SPEED,
 } from './config.js';
 import {
-  sim, cfg, offRampActive, rampLaneIdx, rampStart, rampEnd,
+  sim, cfg, offRampActive, rampLaneIdx, rampLen, rampStart, rampEnd,
   effTarget, vmaxFloat, rollSpeedFactor, carV0, weatherTfactor, weatherS0add,
 } from './state.js';
 import { rng } from './rng.js';
@@ -84,6 +85,7 @@ function makeCar(lane, cell, v) {
     prevCell: cell, prevLane: lane, startV: v,
     laneCoord: lane,          // CONTINUOUS lane coordinate (renderer reads this for y)
     laneFrom: lane, laneTo: lane, laneT: 1, // lane-change animation state (laneT in [0,1])
+    prevLaneT: 1,             // laneT at the last snapshot (renderer-only, for exact S-curve)
     lane2: null,              // secondary lane occupied while straddling the line
     lc: null,                 // lane-change plan { target, dir, phase, t, wait, sigTime, forced, from }
     signal: 0,                // blinker: -1 left (screen-up), +1 right (screen-down), 0 off
@@ -173,8 +175,15 @@ function virtualObstacle(car, lane, skipWall) {
       if (st === 'green') continue;
       const d = lights[i] - car.cell;       // open road: a passed light is behind us
       if (d < 0) continue;
-      // Yellow: only stop if we cannot comfortably clear it (still > ~1 cell away).
-      if (st === 'yellow' && d < Math.max(1, car.v * 0.6)) continue;
+      // Yellow — real dilemma-zone behavior: a driver runs the yellow when the
+      // stop line is closer than the distance needed to stop at a tolerable
+      // braking rate (~1.4× comfortable b, still well below emergency), and
+      // stops otherwise. Old rule only ran it within ~0.6 s of the line, which
+      // forced harsh stops from well inside the dilemma zone.
+      if (st === 'yellow') {
+        const bStop = ((car.prof && car.prof.b) || 0.27) * 1.4;
+        if (d < (car.v * car.v) / (2 * bStop)) continue;
+      }
       if (d < best) best = d;
     }
   }
@@ -222,7 +231,7 @@ function idmAccel(car, gap, leadV) {
 // in `lane` — the value MOBIL and the integrator both consult. `skipWall` is
 // passed when this is the lane a merging car is leaving (see virtualObstacle).
 function accelInLane(car, lane, skipWall) {
-  const scan = Math.ceil(carV0(car) * 1.6) + 8;
+  const scan = Math.ceil(carV0(car) * 2.2) + 10;   // look ≈2+ s of travel ahead
   const r = leaderInLane(car, lane, scan);
   let gap = r.gap, leadV = r.leadV;
   // A stationary virtual obstacle (red light / incident / ramp wall) becomes the
@@ -232,7 +241,40 @@ function accelInLane(car, lane, skipWall) {
     const obstGap = obst - (car.len || CAR_LEN);
     if (obstGap < gap) { gap = obstGap; leadV = 0; }
   }
-  return idmAccel(car, gap, leadV);
+  let acc = idmAccel(car, gap, leadV);
+
+  // Multi-vehicle anticipation (Treiber/Kesting's human-driver extension of
+  // IDM): real drivers watch the car AHEAD of their leader through its rear
+  // window and ease off early when the platoon up front is slower, instead of
+  // reacting late and braking hard. Modelled as also car-following the
+  // second leader over the combined gap and taking the more cautious of the
+  // two accelerations — this only binds when the far vehicle is the slower one.
+  if (r.lead) {
+    const r2 = leaderInLane(r.lead, lane, scan);
+    if (r2.lead && r2.leadV < leadV) {
+      const gap2 = gap + (r.lead.len || CAR_LEN) + r2.gap;
+      const acc2 = idmAccel(car, gap2, r2.leadV);
+      if (acc2 < acc) acc = acc2;
+    }
+  }
+
+  // Exit-ramp approach: a driver committed to the off-ramp and already in the
+  // exit lane sheds speed GRADUALLY toward the ramp advisory speed, following
+  // a comfortable kinematic envelope v(d) = sqrt(v_ramp² + 2·b·d) instead of
+  // sailing into the gore at full highway speed. (Real drivers begin slowing
+  // ~10 s upstream of an exit and take the ramp at the advisory speed.)
+  if (car.exiting && car.exitDecided && offRampActive() &&
+      lane === sim.lanes - 1 && car.lane === sim.lanes - 1) {
+    const d = cfg().offRampCell - car.cell;
+    if (d > 0) {
+      const vAllow = Math.sqrt(EXIT_RAMP_SPEED * EXIT_RAMP_SPEED +
+                               2 * car.prof.b * d);
+      const accExit = Math.max(-B_SAFE * 2, car.prof.a *
+        (1 - Math.pow(car.v / Math.max(vAllow, 0.3), IDM_DELTA)));
+      if (accExit < acc) acc = accExit;
+    }
+  }
+  return acc;
 }
 
 //──────────────────────────── MOBIL lane changing ────────────────────────────
@@ -247,7 +289,7 @@ function accelInLane(car, lane, skipWall) {
 //             courteous followers in the target lane ease off to open the gap
 //             (yieldPass), aggressive ones may close it instead. Discretionary
 //             attempts give up after prof.patience seconds.
-//   EXECUTE : the lateral slide takes LANE_CHANGE_TIME (~2.6 s) on a smoothstep
+//   EXECUTE : the lateral slide takes LANE_CHANGE_TIME (~4.5 s) on a smoothstep
 //             curve, the body visibly steering over (car.tilt). From the first
 //             moment it occupies BOTH lanes: target-lane traffic treats it as a
 //             leader immediately, old-lane traffic until it is mostly across,
@@ -300,22 +342,41 @@ function mobilDesire(car, target) {
 // driver accept progressively tighter gaps so traffic never wedges solid.
 function gapCheck(car, target, urgency) {
   const ga = car.prof.gapAccept * Math.max(0.35, 1 - urgency);
+  // Real gap acceptance is TIME-based: observed minimum accepted lead/lag gaps
+  // at merges are ≈0.5–1.0 s each (smallest recorded ≈0.75–1 s total), so the
+  // pocket demanded here scales with speed — ~0.35 s of lead gap and ~0.3 s of
+  // lag gap at speed, plus a base margin and a strong surcharge on closing
+  // speed. Urgency (ramp wall / imminent exit / blocked lane) lets a driver
+  // accept progressively tighter pockets, like real drivers near a gore point.
+  // Absolute floor on each margin: half a MERGE_MARGIN when relaxed, shrinking
+  // toward ~2 m for a wedged driver — observed creep-merges at gore points
+  // accept lead/lag buffers of only 1–2 m.
+  const floor = MERGE_MARGIN * (0.5 - 0.3 * urgency);
   const lead = leaderInLane(car, target, N);
-  const needAhead = Math.max(MERGE_MARGIN * 0.5,
-    (0.8 + 0.9 * Math.max(0, car.v - lead.leadV)) * ga);
+  const needAhead = Math.max(floor,
+    (0.8 + 0.35 * car.v + 0.9 * Math.max(0, car.v - lead.leadV)) * ga);
   if (lead.gap < needAhead) return false;
 
   const fol = followerInLane(car, target, N);
   if (fol.foll) {
-    const needBehind = Math.max(MERGE_MARGIN * 0.5,
-      (0.6 + 1.0 * Math.max(0, fol.foll.v - car.v)) * ga);
+    // Physical guard, independent of urgency: the lag gap must exceed the
+    // follower's EMERGENCY stopping distance for the speed it would have to
+    // shed — no driver cuts in where contact is kinematically guaranteed.
+    const shed = Math.max(0, fol.foll.v - car.v);
+    const needBehind = Math.max(floor,
+      shed * shed / (2 * B_SAFE * 2) + 0.2,
+      (0.6 + 0.3 * fol.foll.v + 1.0 * shed) * ga);
     if (fol.gap < needBehind) return false;
     // Hard safety: the new follower must not be forced into harsh braking.
+    // The bound is the canonical MOBIL b_safe (4 m/s²) for discretionary
+    // changes, relaxing toward ~8 m/s² for a driver wedged at a gore point —
+    // real forced merges DO impose hard (but not crash-level) braking on the
+    // lag vehicle, and a stuck merger eventually goes for it.
     const saved = car.lane;
     car.lane = target;
     const aNt = accelInLane(fol.foll, fol.foll.lane);
     car.lane = saved;
-    if (aNt < -B_SAFE) return false;
+    if (aNt < -B_SAFE * (1 + 2 * urgency)) return false;
   }
   return true;
 }
@@ -338,7 +399,9 @@ function lcUrgency(car) {
   return u;
 }
 
-const LANE_CHANGE_TIME = 2.6;   // seconds for the lateral slide (smoothstep)
+// Seconds for the lateral slide (smoothstep). NGSIM trajectory studies put
+// freeway lane-change durations at ≈2.9–7.3 s with a mean around 4–5 s.
+const LANE_CHANGE_TIME = 4.5;
 
 // DECIDE → SIGNAL: switch the blinker on; no lateral movement yet. Forced
 // merges (on-ramp) signal from the moment they hit the accel lane, so by the
@@ -449,15 +512,18 @@ function laneChangeStep() {
     if (sim.lanes < 2) continue;
 
     // Exiting cars (interchange) weave toward the rightmost lane for the ramp.
+    // They accept a real disadvantage (up to ≈0.75 m/s² = 0.10 cells/s²) to
+    // line up the exit — the one legitimate reason to move into a slower lane.
     if (car.exiting && car.lane < sim.lanes - 1) {
       const g = mobilDesire(car, car.lane + 1);
-      if (g !== null && g > -0.4) { startSignal(car, car.lane + 1, false); continue; }
+      if (g !== null && g > -0.10) { startSignal(car, car.lane + 1, false); continue; }
     }
 
     // Discretionary MOBIL: evaluate both neighbours, take the best gain. The
-    // 0.25 floor (on top of each profile's threshold) keeps churn down — a
-    // change must promise a real improvement before the blinker comes on.
-    let bestGain = 0.25, bestTarget = -1;
+    // 0.035 cells/s² (≈0.26 m/s²) floor on top of each profile's threshold
+    // keeps churn down — a change must promise a tangible improvement before
+    // the blinker comes on (cf. MOBIL Δa_th=0.1 m/s², Δa_bias=0.3 m/s²).
+    let bestGain = 0.035, bestTarget = -1;
     for (const t of [car.lane - 1, car.lane + 1]) {
       if (car.exiting && t < car.lane) continue;   // exiters never drift left
       const g = mobilDesire(car, t);
@@ -557,11 +623,14 @@ function speedAndMoveStep() {
         const g = (yf.cell - car.cell) - (car.len || CAR_LEN);
         if (g > 0.1 && car.v > yf.v - 0.2) {
           const ay = idmAccel(car, Math.max(0.3, g - 1.0), yf.v);
-          if (ay < a2) a2 = Math.max(ay, -0.9);
+          // Courtesy yielding is GENTLE: cap at ~1.5 m/s² (0.2 cells/s²) —
+          // a real driver lifts off / brushes the brake for a merger, never
+          // brakes hard for someone else's blinker.
+          if (ay < a2) a2 = Math.max(ay, -0.2);
         }
-      } else if (car.closeGap && a2 > -0.5) {
-        // Aggressive: nudge forward to deny the merger the pocket.
-        a2 = Math.min(a2 + 0.35, car.prof.a);
+      } else if (car.closeGap && a2 > -0.1) {
+        // Aggressive: nudge forward (~0.5 m/s²) to deny the merger the pocket.
+        a2 = Math.min(a2 + 0.07, car.prof.a);
       }
       acc[i] = a2;
     }
@@ -690,11 +759,15 @@ function spawnLeftEdge(target) {
     // Arrival speed: the visible strip is a slice of a longer road, so a car
     // "was already driving" before it appeared — it enters at the speed the
     // traffic ahead supports, not from a near-standstill. Clear lane ⇒ its own
-    // desired speed; leader ahead ⇒ the higher of matching the leader or the
-    // IDM-equilibrium speed the current gap sustains at its headway T.
+    // desired speed; leader ahead ⇒ the comfortable-braking kinematic envelope
+    // v = √(v_lead² + 2·b·(gap − s0)): the fastest speed from which it can
+    // still ease down to the leader's pace within the available gap at its
+    // comfortable deceleration. (A driver coming up on a queue from upstream
+    // would have ALREADY slowed before entering the visible strip.)
     const free = carV0(car);
     const eq = r.lead
-      ? Math.max(r.leadV, (r.gap - car.prof.s0) / car.prof.T)
+      ? Math.sqrt(r.leadV * r.leadV +
+                  2 * car.prof.b * Math.max(0, r.gap - car.prof.s0))
       : free;
     car.v = car.startV = Math.max(0.4, Math.min(free, eq));
     sim.cars.push(car);
@@ -703,7 +776,29 @@ function spawnLeftEdge(target) {
 }
 
 function releaseRampCar(entry) {
-  const car = makeCar(rampLaneIdx(), entry, 1.2);  // re-rolls profile & exit chance
+  const car = makeCar(rampLaneIdx(), entry, 0);  // re-rolls profile & exit chance
+  // Real merge behavior is speed matching: an unmetered driver rolls down the
+  // ramp carrying speed (~30–40 mph, more on a longer acceleration lane) so it
+  // arrives near mainline pace; a metered release launches from a standing
+  // start at the stop bar (~20 mph by the merge area).
+  const want = sim.meterOn ? 1.2 : Math.min(2.4, 1.2 + rampLen() * 0.11);
+  // Cap that desired entry speed by the comfortable-braking envelope to whatever
+  // is queued ahead in the acceleration lane — exactly as left-edge arrivals are
+  // capped (see spawnLeftEdge). A car rolling onto a backed-up accel lane must
+  // still be able to ease down to its leader's pace within the available gap, so
+  // it can never overrun a stopped merge queue and clip its tail.
+  const r = leaderInLane(car, rampLaneIdx(), N);
+  // Physical fit guard: the rolled vehicle's body (rear at the entry cell, front
+  // at entry + car.len) must clear the pocket ahead. A long truck can be longer
+  // than the entry gate's fixed clearance, so without this it would be placed
+  // straddling a car already queued in the accel lane. If it doesn't fit, leave
+  // it queued and try again next tick rather than clip the line.
+  if (r.lead && r.gap < car.prof.s0) return;
+  const eq = r.lead
+    ? Math.sqrt(r.leadV * r.leadV +
+                2 * car.prof.b * Math.max(0, r.gap - car.prof.s0))
+    : want;
+  car.v = car.startV = Math.max(0.4, Math.min(want, eq));
   sim.cars.push(car);
   sim.rampQueue--;
 }
@@ -716,6 +811,7 @@ function snapshotPrev() {
   for (const car of sim.cars) {
     car.prevCell = car.cell;
     car.prevLane = car.laneCoord;   // renderer lerps the CONTINUOUS lane coord
+    car.prevLaneT = car.laneT;      // lets the renderer evaluate the exact S-curve
     car.prevTilt = car.tilt;
     car.startV = car.v;
   }
@@ -835,7 +931,7 @@ function genBuildings() {
 }
 
 export {
-  setEngineHooks,
+  setEngineHooks, LANE_CHANGE_TIME,
   lightPhases, lightOffset, lightState, makeCar, fwd, occupiesLane,
   leaderInLane, followerInLane, leaderGap, idmAccel, accelInLane,
   tick, resetSim, applyLaneCount, genBuildings,

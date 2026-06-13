@@ -66,14 +66,22 @@ for (const { label, over } of SCENARIOS_UNDER_TEST) {
   for (const seed of [1, 42, 1337]) {
     test(`invariants hold for 300 ticks: ${label} (seed ${seed})`, () => {
       resetWorld(over, seed);
+      // Liveness is judged on the MEAN speed over the last 60 ticks (a full
+      // signal cycle), not a single instant: with realistic acceleration a
+      // city queue sampled right at the start of green is legitimately still
+      // standing, yet traffic flows fine over the cycle.
+      const tailAvg = [];
       for (let i = 0; i < 300; i++) {
         tick();
         checkInvariants(label);
+        if (i >= 240 && sim.cars.length) {
+          tailAvg.push(sim.cars.reduce((a, c) => a + c.v, 0) / sim.cars.length);
+        }
       }
       // Liveness: traffic actually flows — cars are present, moving on average,
       // and the throughput sensor has fired within the rolling window.
       assert.ok(sim.cars.length > 0, 'road went empty');
-      const avgV = sim.cars.reduce((a, c) => a + c.v, 0) / sim.cars.length;
+      const avgV = tailAvg.reduce((a, b) => a + b, 0) / Math.max(1, tailAvg.length);
       assert.ok(avgV > 0.2, `traffic ground to a halt (avg v ${avgV.toFixed(3)})`);
       assert.ok(sim.evThroughput.length > 0, 'sensor never fired');
     });

@@ -6,7 +6,7 @@ import { N, TICK_MS, INCIDENT_CELL, SENSOR_CELL, CAR_LEN } from './config.js';
 import {
   sim, cfg, offRampActive, rampLaneIdx, rampStart, rampEnd,
 } from './state.js';
-import { lightState } from './engine.js';
+import { lightState, LANE_CHANGE_TIME } from './engine.js';
 import { selectCar } from './ui.js';
 import { $ } from './dom.js';
 
@@ -27,20 +27,41 @@ let W = 0, H = 380, dpr = 1;
 // (the maximum zoom-out — the full loop is always on screen at 1×); zooming
 // in magnifies about the cursor, after which the view can be dragged.
 // Screen→world: w = s / z + cam. Cost is one save/scale/translate per frame.
+//
+// `cam` is what is DRAWN each frame; `camT` is the target the controls write.
+// Each frame cam eases exponentially toward camT, so wheel notches and the
+// zoom buttons glide instead of stepping. Panning writes BOTH (direct
+// manipulation must track the pointer 1:1, never lag behind it).
 const cam = { z: 1, x: 0, y: 0 };
+const camT = { z: 1, x: 0, y: 0 };
 const ZOOM_MIN = 1, ZOOM_MAX = 6;
-function clampCam() {
-  cam.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, cam.z));
-  cam.x = Math.min(W - W / cam.z, Math.max(0, cam.x));
-  cam.y = Math.min(H - H / cam.z, Math.max(0, cam.y));
+function clampOne(c) {
+  c.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, c.z));
+  c.x = Math.min(W - W / c.z, Math.max(0, c.x));
+  c.y = Math.min(H - H / c.z, Math.max(0, c.y));
 }
+function clampCam() { clampOne(cam); clampOne(camT); }
 // Zoom by `factor` keeping the world point under screen (sx, sy) fixed.
+// Operates on the TARGET camera; the render loop eases the view there.
 function zoomAt(sx, sy, factor) {
-  const wx = sx / cam.z + cam.x, wy = sy / cam.z + cam.y;
-  cam.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, cam.z * factor));
-  cam.x = wx - sx / cam.z;
-  cam.y = wy - sy / cam.z;
+  const wx = sx / camT.z + camT.x, wy = sy / camT.z + camT.y;
+  camT.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, camT.z * factor));
+  camT.x = wx - sx / camT.z;
+  camT.y = wy - sy / camT.z;
   clampCam();
+}
+// Ease the displayed camera toward the target (called once per frame).
+function easeCamera(dtMs) {
+  const k = 1 - Math.exp(-dtMs / 90);          // ~90 ms time constant
+  cam.z += (camT.z - cam.z) * k;
+  cam.x += (camT.x - cam.x) * k;
+  cam.y += (camT.y - cam.y) * k;
+  // Snap when effectively settled so we stop accumulating sub-pixel drift.
+  if (Math.abs(camT.z - cam.z) < 1e-4 &&
+      Math.abs(camT.x - cam.x) < 0.02 && Math.abs(camT.y - cam.y) < 0.02) {
+    cam.z = camT.z; cam.x = camT.x; cam.y = camT.y;
+  }
+  clampOne(cam);
 }
 
 const scene = document.createElement('canvas');  // offscreen static scenery
@@ -71,11 +92,30 @@ function roadTop() {
   return Math.max(40, Math.round((H - band) / 2));
 }
 function cw() { return W / N; }
-// Interpolated position in cells, handling ring wrap.
+
+// Per-frame wall clock, shared by every animation in this file. nowMs/frameDt
+// are refreshed once at the top of render() so all painters agree on "now".
+let nowMs = performance.now();
+let frameDt = 16;
+
+// Interpolated position in cells, handling ring wrap. Cubic Hermite rather
+// than linear: the engine snapshots the speed at both tick boundaries
+// (car.startV at the start, car.v at the end), so we can match velocity as
+// well as position across ticks — cars visibly ease in/out instead of
+// changing speed instantaneously once per second. Tangents are clamped to
+// [0, 3·D] (Fritsch–Carlson) so the curve can never overshoot or reverse,
+// even when the boundary speeds disagree with the integrated displacement
+// (e.g. a freshly spawned car with D = 0 but v > 0 stays put).
 function lerpPos(car, a) {
   let to = car.cell;
   if (to < car.prevCell) to += N;
-  return (car.prevCell + (to - car.prevCell) * a) % N;
+  const D = to - car.prevCell;                 // displacement over the tick
+  const m0 = Math.max(0, Math.min(car.startV, 3 * D));
+  const m1 = Math.max(0, Math.min(car.v, 3 * D));
+  const a2 = a * a, a3 = a2 * a;
+  const pos = car.prevCell + m0 * a +
+              (3 * D - 2 * m0 - m1) * a2 + (m0 + m1 - 2 * D) * a3;
+  return ((pos % N) + N) % N;
 }
 
 // Rounded-rect fill helper (radius clamped so tiny shapes stay valid).
@@ -126,11 +166,18 @@ function paintAsphalt(g, top, rh, rnd) {
 }
 
 function paintLaneDashes(g, top) {
-  g.fillStyle = '#d9dade';
-  const dash = Math.max(9, cw() * 2), gap = dash * 1.7;
+  // US convention: a broken lane line is a 10 ft stripe with a 30 ft gap
+  // (1:3). 1 cell = 7.5 m ≈ 24.6 ft, so a stripe ≈ 0.41 cell and the gap ≈
+  // 1.22 cell. Scaled to pixels via cw(); clamped so it never disappears.
+  const c = cw();
+  const dash = Math.max(6, c * 0.41), gap = Math.max(14, c * 1.22);
   for (let l = 1; l < sim.lanes; l++) {
-    const y = top + l * LANE_H - 1;
-    for (let x = 4; x < W; x += dash + gap) g.fillRect(x, y, dash, 2);
+    const y = top + l * LANE_H - 1.25;
+    // soft cast shadow under the paint, then the bright stripe
+    for (let x = 6; x < W; x += dash + gap) {
+      g.fillStyle = 'rgba(0,0,0,.22)'; g.fillRect(x + 0.6, y + 1, dash, 2.5);
+      g.fillStyle = '#eef0f3'; g.fillRect(x, y, dash, 2.5);
+    }
   }
 }
 
@@ -187,7 +234,11 @@ function buildScene() {
 }
 
 function render() {
-  const a = sim.paused ? 1 : Math.min(1, (performance.now() - sim.lastTickWall) / TICK_MS);
+  const t = performance.now();
+  frameDt = Math.min(100, Math.max(1, t - nowMs));   // clamp tab-switch spikes
+  nowMs = t;
+  easeCamera(frameDt);
+  const a = sim.paused ? 1 : Math.min(1, (nowMs - sim.lastTickWall) / TICK_MS);
   const sig = W + '|' + H + '|' + dpr + '|' + sim.scenario + '|' + sim.lanes + '|' +
               sim.mergeShape + '|' + sim.weather + '|' + sim.exitRamp + '|' +
               sim.buildings.length;
@@ -259,8 +310,12 @@ function buildHighwayStatic(g) {
 
   // mainline asphalt + edge lines + dashes
   paintAsphalt(g, top, rh, rnd);
-  g.fillStyle = '#e6c84e'; g.fillRect(0, top + 1.5, W, 2);   // yellow left-edge line
-  g.fillStyle = '#e4e5e9'; g.fillRect(0, ry - 3.5, W, 2);    // white right-edge line
+  // Solid yellow edge line on the median (left) side, solid white on the right
+  // shoulder — both with a faint cast shadow so they sit ON the asphalt.
+  g.fillStyle = 'rgba(0,0,0,.20)'; g.fillRect(0, top + 3, W, 2.4);
+  g.fillStyle = '#f2cf3c'; g.fillRect(0, top + 2, W, 2.4);    // yellow left-edge line
+  g.fillStyle = 'rgba(0,0,0,.20)'; g.fillRect(0, ry - 2.6, W, 2.4);
+  g.fillStyle = '#eef0f3'; g.fillRect(0, ry - 3.8, W, 2.4);   // white right-edge line
   paintLaneDashes(g, top);
 
   // ── On-ramp approach roadway: a separate lane angling up from the lower-left
@@ -296,12 +351,13 @@ function buildHighwayStatic(g) {
   g.lineTo(reX, ry + 2); g.lineTo(reX - taper, ay);     // outer edge tapers up to boundary
   g.lineTo(rsX, ay);
   g.closePath(); g.fill();
-  // mainline right-edge line becomes a dotted "merge" line across the accel zone
+  // mainline right-edge line becomes a wide dotted channelizing line across the
+  // accel zone (short dots, big gaps — the MUTCD lane-drop / merge marking)
   g.fillStyle = '#3b3c41'; g.fillRect(rsX, ry - 4, reX - rsX, 4);
-  g.fillStyle = '#e4e5e9';
-  for (let x = rsX + 2; x < reX - 4; x += 13) g.fillRect(x, ry - 3.5, 7, 2);
+  g.fillStyle = '#eef0f3';
+  for (let x = rsX + 2; x < reX - 6; x += 18) g.fillRect(x, ry - 3.6, 9, 2.4);
   // accel-lane outer (white) edge line, following the taper into the boundary
-  g.strokeStyle = '#e4e5e9'; g.lineWidth = 2;
+  g.strokeStyle = '#eef0f3'; g.lineWidth = 2.4;
   g.beginPath();
   g.moveTo(rsX, ay - 1.5); g.lineTo(reX - taper, ay - 1.5); g.lineTo(reX, ry + 1);
   g.stroke();
@@ -333,10 +389,11 @@ function buildHighwayStatic(g) {
     g.moveTo(ox - mouth, ry); g.lineTo(ox + offDrop * 0.55, ry + offDrop);   // inner
     g.moveTo(ox, ry); g.lineTo(ox + offDrop * 0.55 + offW, ry + offDrop);    // outer
     g.stroke();
-    // mainline right-edge line becomes dotted across the exit mouth
+    // mainline right-edge line becomes a dotted channelizing line across the
+    // deceleration-lane opening (matches the on-ramp merge marking)
     g.fillStyle = '#3b3c41'; g.fillRect(ox - mouth, ry - 4, mouth + 2, 4);
-    g.fillStyle = '#e4e5e9';
-    for (let x = ox - mouth + 2; x < ox; x += 13) g.fillRect(x, ry - 3.5, 7, 2);
+    g.fillStyle = '#eef0f3';
+    for (let x = ox - mouth + 2; x < ox; x += 18) g.fillRect(x, ry - 3.6, 9, 2.4);
     // gore chevrons in the triangular nose just past the exit point
     g.strokeStyle = 'rgba(230,231,236,.6)'; g.lineWidth = 2;
     g.beginPath();
@@ -374,32 +431,60 @@ function buildHighwayStatic(g) {
 }
 
 //—— Highway dynamic layer: ramp queue, meter signal, incident ——
-function drawHighwayScene() {
-  const top = roadTop(), rh = sim.lanes * LANE_H, c = cw();
-  const ry = top + rh, ay = ry + LANE_H;
-  const rsX = rampStart() * c;                          // accel-lane entry x
-  // Approach geometry (mirrors buildHighwayStatic so cars/meter sit on the ramp)
+// On-ramp approach geometry (mirrors buildHighwayStatic so queue cars, the
+// meter and the ramp-entry glide all sit exactly on the painted approach).
+function approachGeom() {
+  const ry = roadTop() + sim.lanes * LANE_H, ay = ry + LANE_H;
+  const rsX = rampStart() * cw();                       // accel-lane entry x
   const appDrop = Math.min(LANE_H * 2.6, (H - ay) * 0.55);
   const appRun = appDrop * 0.62;
   const appBot = ay + appDrop;
   // Approach centreline: from the accel-lane entry down-left to the queue foot.
   const cTopX = rsX + LANE_H * 0.28, cBotX = (rsX - appRun) + LANE_H / 2;
-  const ang = Math.atan2(appBot - ay, cBotX - cTopX);   // direction of travel up-ramp
+  return {
+    ay, appBot, cTopX, cBotX,
+    ang: Math.atan2(appBot - ay, cBotX - cTopX),     // pointing down-ramp
+    heading: Math.atan2(ay - appBot, cTopX - cBotX), // direction of travel up-ramp
+  };
+}
+
+// Queue-slide state: when the meter releases a car, the rest of the queue
+// glides forward one slot instead of teleporting into it.
+let lastQueue = 0, qShift = 0;
+
+function drawHighwayScene() {
+  const top = roadTop(), c = cw();
+  const { ay, appBot, cTopX, cBotX, ang } = approachGeom();
+
+  if (sim.rampQueue < lastQueue) qShift = Math.min(1, qShift + (lastQueue - sim.rampQueue));
+  lastQueue = sim.rampQueue;
+  if (qShift > 0) {
+    qShift *= Math.exp(-frameDt / 200);                 // eased slide up the ramp
+    if (qShift < 0.01) qShift = 0;
+  }
 
   // queued cars stacked along the approach centreline, nose pointing up-ramp
   // (drawn at the same scale as live traffic so the queue reads as real cars)
   const q = Math.min(sim.rampQueue, 5);
   if (q > 0) {
     for (let i = 0; i < q; i++) {
-      const t = 0.15 + i * 0.19;                        // 0=at meter, 1=foot of ramp
+      const t = 0.15 + (i + qShift) * 0.19;             // 0=at meter, 1=foot of ramp
       ctx.save();
       ctx.translate(cTopX + (cBotX - cTopX) * t, ay + (appBot - ay) * t);
       ctx.rotate(ang);
-      ctx.fillStyle = 'rgba(0,0,0,.3)'; rr(ctx, -8.4, -3.6, 17.4, 9, 2.6);
-      ctx.fillStyle = '#a7adba'; rr(ctx, -9, -4.4, 17, 8.4, 2.8);
-      ctx.fillStyle = 'rgba(18,26,38,.75)'; rr(ctx, 0.4, -3.3, 4, 6.6, 1.4);
-      ctx.fillStyle = '#ffedb0'; ctx.fillRect(-8.8, -3.6, 1.4, 1.8);
-      ctx.fillRect(-8.8, 1.8, 1.4, 1.8);
+      // queue cars share the live-car proportions (≈half a lane wide) so the
+      // stack reads as the same fleet, with a little hue variety per slot
+      const ql = 17, qh = 7.4;
+      ctx.fillStyle = 'rgba(0,0,0,.32)'; rr(ctx, -ql / 2 + 0.6, -qh / 2 + 1.4, ql, qh, 2.4);
+      ctx.fillStyle = `hsl(${(i * 47) % 360},${i % 2 ? 12 : 34}%,${60 + (i % 3) * 6}%)`;
+      rr(ctx, -ql / 2, -qh / 2, ql, qh, 2.4);
+      // local frame: ang points DOWN-ramp, so the cars' direction of travel
+      // (up-ramp, toward the meter) is −x → windshield & headlights sit at −x
+      ctx.fillStyle = 'rgba(14,23,38,.78)'; rr(ctx, -4.6, -qh / 2 + 1, 4, qh - 2, 1.2); // windshield
+      ctx.fillStyle = 'rgba(255,255,255,.12)'; rr(ctx, -ql / 2 + 1, -qh / 2 + 0.8, ql - 2, qh * 0.32, 1);
+      ctx.fillStyle = '#ffedb0';               // headlights facing up-ramp
+      ctx.fillRect(-ql / 2 + 0.4, -qh / 2 + 0.8, 1.4, 1.6);
+      ctx.fillRect(-ql / 2 + 0.4, qh / 2 - 2.4, 1.4, 1.6);
       ctx.restore();
     }
   }
@@ -646,7 +731,8 @@ function drawSensor(g, top, rh) {
   g.setLineDash([]);
 }
 
-//—— Vehicles: shadowed, lit bodies (cab+trailer trucks), lerped between ticks ——
+//—— Vehicles: shadowed, lit bodies (cab+trailer trucks), Hermite-interpolated
+//   between ticks (position AND velocity matched at tick boundaries) ——
 // Cars travel left→right: front/headlights at x+len, rear/taillights at x.
 // Bodies are drawn at exactly car.len × cw() px long so bumper gaps on screen
 // match the physics, and ~0.62 × LANE_H wide so a car fills a realistic share
@@ -656,30 +742,158 @@ function drawSensor(g, top, rh) {
 // A car mid lane change is rotated by its steering tilt (save/translate/rotate
 // only while turning — straight-line traffic stays on the cheap path).
 
+// Real-rate blinker (~1.5 Hz, 55% duty), de-phased per car by id so the fleet
+// doesn't flash in lockstep like a Christmas tree.
+function blinkOn(car) { return ((nowMs / 667 + car.id * 0.41) % 1) < 0.55; }
+
+// Spawn/despawn smoothing. `tracked` remembers which cars existed last frame:
+// a car that VANISHED becomes a short render-only ghost that drives out of
+// the world (down the exit ramp, or off the right edge) instead of popping
+// away mid-screen; a car that APPEARED gets an entry glide (in from the left
+// edge, or up the on-ramp approach) instead of materialising in place.
+const tracked = new Map();        // id → car, as of the previous frame
+let trackTime = -1;               // sim.time of that frame (reset detection)
+const ghosts = [];                // { car, x, y, rot, alpha, t, kind }
+const EXIT_RAMP_ANGLE = Math.atan2(1, 0.55);   // painted off-ramp tangent
+
+function updateCarTracking() {
+  if (sim.time < trackTime) {                  // sim was reset: drop everything
+    tracked.clear(); ghosts.length = 0;
+  }
+  const wasTracking = trackTime >= 0 && sim.time >= trackTime;
+  let gone = null;
+  if (wasTracking) {
+    const live = new Set();
+    for (const car of sim.cars) live.add(car.id);
+    for (const [id, car] of tracked) {
+      if (!live.has(id)) (gone || (gone = [])).push(car);
+    }
+    // A mass disappearance is a scenario/lane rebuild, not traffic — no ghosts.
+    if (gone && gone.length <= 4 && !sim.paused) {
+      const c = cw();
+      for (const car of gone) {
+        if (car.drawX === undefined) continue;
+        if (offRampActive() && car.lane === sim.lanes - 1 &&
+            Math.abs((car.drawX + car.drawLen) - cfg().offRampCell * c) < c * 4) {
+          ghosts.push({ car, x: car.drawX, y: car.drawY, rot: 0, alpha: 1, t: 0, kind: 'exit' });
+        } else if (car.drawX + car.drawLen > (N - 6) * c) {
+          ghosts.push({ car, x: car.drawX, y: car.drawY, rot: 0, alpha: 1, t: 0, kind: 'edge' });
+        }
+      }
+    }
+    for (const car of sim.cars) {
+      if (!tracked.has(car.id)) {              // first frame of this car's life
+        car.inWall = nowMs;
+        car.inKind = (cfg().hasRamp && car.lane === rampLaneIdx()) ? 'ramp'
+                   : car.cell < 3 ? 'edge' : '';
+      }
+    }
+  }
+  tracked.clear();
+  for (const car of sim.cars) tracked.set(car.id, car);
+  trackTime = sim.time;
+}
+
+// Ghosts integrate their position per frame, blending the travel direction
+// from straight-ahead into the ramp tangent over ~0.4 s, so an exiting car
+// follows a smooth curve through the gore point — no kink, no teleport.
+function drawGhosts(c) {
+  for (let i = ghosts.length - 1; i >= 0; i--) {
+    const g = ghosts[i];
+    const life = g.kind === 'exit' ? 850 : 400;
+    if (!sim.paused) {                         // paused ⇒ ghosts freeze too
+      g.t += frameDt;
+      if (g.t >= life) { ghosts.splice(i, 1); continue; }
+      if (g.kind === 'exit') {
+        const k = Math.min(1, g.t / 420);
+        g.rot = EXIT_RAMP_ANGLE * k * k * (3 - 2 * k);  // ease into the ramp heading
+      }
+      const sp = Math.max(0.6, g.car.v) * c * (frameDt / TICK_MS);  // px this frame
+      g.x += sp * Math.cos(g.rot);
+      g.y += sp * Math.sin(g.rot);
+      g.alpha = Math.min(1, 2 * (1 - g.t / life));      // hold, then fade out
+    }
+    const len = g.car.drawLen;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, g.alpha);
+    ctx.translate(g.x + len / 2, g.y);
+    ctx.rotate(g.rot);
+    (g.car.isTruck ? drawTruck : drawCar)(g.car, -len / 2, 0, len, blinkOn(g.car));
+    ctx.restore();
+  }
+}
+
 function drawCars(a) {
   const top = roadTop(), c = cw();
-  const blink = Math.floor(performance.now() / 380) % 2 === 0;
+  updateCarTracking();
+  drawGhosts(c);
   for (const car of sim.cars) {
     const pos = lerpPos(car, a);
-    // Lerp the CONTINUOUS lane coordinate (prev → current) so a lane change
-    // is drawn straddling the line as the body slides across.
-    const laneF = car.prevLane + (car.laneCoord - car.prevLane) * a;
-    const x = pos * c;
-    const y = top + laneF * LANE_H + LANE_H / 2;
+    // Lateral position: a car mid lane change follows the engine's exact
+    // smoothstep S-curve, evaluated at the inter-tick phase tt — the same
+    // curve the engine samples once per second — so the slide is slow-fast-
+    // slow with no per-tick corners, and the body yaw is the curve's TRUE
+    // lateral velocity (peaks mid-change, settles back), always in sync with
+    // the sideways motion. Straight-line cars take the cheap lerp path.
+    const prevT = car.prevLaneT !== undefined ? car.prevLaneT : 1;
+    let laneF, tilt;
+    if (car.laneT < 1 || prevT < 1) {
+      const t0 = prevT <= car.laneT ? prevT : 0;        // restarted curve ⇒ from 0
+      const tt = t0 + (car.laneT - t0) * a;
+      const span = car.laneTo - car.laneFrom;
+      laneF = car.laneFrom + span * tt * tt * (3 - 2 * tt);
+      const latV = span * 6 * tt * (1 - tt) / LANE_CHANGE_TIME;
+      tilt = Math.max(-0.20, Math.min(0.20, latV * 0.34));
+    } else {
+      laneF = car.prevLane + (car.laneCoord - car.prevLane) * a;
+      tilt = car.prevTilt + (car.tilt - car.prevTilt) * a;
+    }
+    let x = pos * c;
+    let y = top + laneF * LANE_H + LANE_H / 2;
     const len = car.len * c;                  // body length in px = physics length
-    const tilt = car.prevTilt + (car.tilt - car.prevTilt) * a;
+    let rot = tilt, alpha = 1;
+
+    // Entry glide: back-extrapolate a newcomer along its path of travel (off
+    // the left edge, or down the ramp approach) and slide it in at its own
+    // speed, with a quick fade, so it joins the flow with no pop and no kink
+    // at the merge point. The offset decays to zero exactly as the engine's
+    // own motion takes over.
+    if (car.inWall !== undefined) {
+      // The glide spans exactly one tick: the offset reaches zero at the same
+      // moment the engine's own integration starts moving the car, so the
+      // hand-off is velocity-continuous (no surge, no hitch).
+      const u = (nowMs - car.inWall) / TICK_MS;
+      if (u >= 1) car.inWall = undefined;
+      else {
+        alpha = Math.min(1, 0.25 + u * 1.5);
+        const d = car.v * (1 - u) * c;                  // distance back along path
+        if (car.inKind === 'edge') {
+          x -= d;
+        } else if (car.inKind === 'ramp') {
+          const gm = approachGeom();
+          x -= d * Math.cos(gm.heading);
+          y -= d * Math.sin(gm.heading);
+          const e = u * u * (3 - 2 * u);
+          rot += gm.heading * (1 - e);                  // heading eases ramp → lane
+        }
+      }
+    }
+
     // World-space footprint of this frame's draw, kept for click hit-testing
     // and the selection highlight.
     car.drawX = x; car.drawY = y; car.drawLen = len;
-    if (Math.abs(tilt) > 0.004) {             // steering across the line
+    const blink = blinkOn(car);
+    if (alpha < 1) ctx.globalAlpha = alpha;
+    if (Math.abs(rot) > 0.004) {              // steering across the line
       ctx.save();
       ctx.translate(x + len / 2, y);
-      ctx.rotate(tilt);
+      ctx.rotate(rot);
       if (car.isTruck) drawTruck(car, -len / 2, 0, len, blink);
       else drawCar(car, -len / 2, 0, len, blink);
       ctx.restore();
     } else if (car.isTruck) drawTruck(car, x, y, len, blink);
     else drawCar(car, x, y, len, blink);
+    if (alpha < 1) ctx.globalAlpha = 1;
   }
 }
 
@@ -710,7 +924,12 @@ function drawVehicleLights(car, x, len, yt, h, blink) {
   const lh = Math.max(1.6, h * 0.20);                  // lamp height scales w/ body
   const lw = Math.max(1.3, len * 0.045);               // lamp width
   const inset = Math.max(1, h * 0.10);                 // keep lamps off the edges
-  if (car.braking) {
+  // Brake lamps hold for a minimum ~350 ms after the engine's per-tick braking
+  // flag last fired, so marginal tick-to-tick decelerations read as one steady
+  // light instead of a 5 Hz flicker. (Real brake lights also latch on for the
+  // whole pedal application, not per-instant deceleration sign.)
+  if (car.braking) car.brakeWall = nowMs;
+  if (car.braking || nowMs - (car.brakeWall || -1e9) < 350) {
     ctx.fillStyle = 'rgba(255,59,48,.35)';             // brake-light glow
     ctx.fillRect(x - 2.4, yt + 0.5, 3.2, h - 1);
     ctx.fillStyle = '#ff3b30';
@@ -732,6 +951,15 @@ function drawVehicleLights(car, x, len, yt, h, blink) {
   }
 }
 
+// Pitch cue: a tiny, eased longitudinal shadow shift — braking dives the nose
+// (shadow slips rearward under the body), hard acceleration squats the tail.
+// One lerp + one offset per vehicle; reads as weight transfer at a glance.
+function bodyPitch(car, len) {
+  const target = car.braking ? 1 : car.accel > 0.06 ? -0.6 : 0;
+  car.pitch = (car.pitch || 0) + (target - (car.pitch || 0)) * Math.min(1, frameDt / 160);
+  return -car.pitch * len * 0.03;
+}
+
 // Top-down car body outline: rounded rear, tapered/rounded front (hood).
 // Builds a path on g; caller sets fillStyle and calls fill() (or stroke()).
 // Radius clamped so it stays valid at tiny len. front = +x edge, rear = x edge.
@@ -750,16 +978,17 @@ function carBody(g, x, yt, len, h) {
 }
 
 function drawCar(car, x, y, len, blink) {
-  // Width ≈ 62% of the lane (real car ≈ 1.8 m in a 3.7 m lane plus margin),
-  // capped so the body always reads clearly longer than wide.
-  const h = Math.min(LANE_H * 0.62, len * 0.56), yt = y - h / 2;
+  // Width ≈ 51% of the lane: a real car ≈ 1.8 m sits in a ~3.6 m lane, so the
+  // body leaves a believable margin of asphalt on each side rather than
+  // filling the lane. Capped against len so it always reads longer than wide.
+  const h = Math.min(LANE_H * 0.51, len * 0.52), yt = y - h / 2;
   car.drawH = h;
   // Detail gates use the ON-SCREEN size, so zooming in reveals wheels,
   // glass and mirrors even when the world-space body is small.
   const lod = len * cam.z;
 
   ctx.fillStyle = 'rgba(0,0,0,.30)';                   // soft drop shadow
-  rr(ctx, x + 1, yt + 1.7, len, h, h * 0.34);
+  rr(ctx, x + 1 + bodyPitch(car, len), yt + 1.7, len, h, h * 0.34);
 
   if (lod > 12) {                                      // wheels proud of the sides
     ctx.fillStyle = '#0e1014';
@@ -817,13 +1046,14 @@ function drawCar(car, x, y, len, blink) {
 }
 
 function drawTruck(car, x, y, len, blink) {
-  // Wider than a car (~70% of the lane) and much longer; cab + boxed trailer.
-  const h = Math.min(LANE_H * 0.70, len * 0.27), yt = y - h / 2;
+  // Wider than a car (a tractor-trailer is ≈2.6 m vs 1.8 m) but still inside
+  // its lane; much longer, drawn as cab + boxed trailer.
+  const h = Math.min(LANE_H * 0.60, len * 0.26), yt = y - h / 2;
   car.drawH = h;
   const lod = len * cam.z;                             // on-screen size gates detail
 
   ctx.fillStyle = 'rgba(0,0,0,.32)';                   // soft drop shadow
-  rr(ctx, x + 1, yt + 1.9, len, h, h * 0.22);
+  rr(ctx, x + 1 + bodyPitch(car, len), yt + 1.9, len, h, h * 0.22);
 
   if (lod < 18) {                                      // too small for cab/trailer
     ctx.fillStyle = car.color;
@@ -951,8 +1181,8 @@ function pickCar(sx, sy) {
 }
 
 function updateZoomUI() {
-  $('zoomLevel').textContent = cam.z.toFixed(1) + '×';
-  canvas.style.cursor = cam.z > 1.001 ? 'grab' : '';
+  $('zoomLevel').textContent = camT.z.toFixed(1) + '×';
+  canvas.style.cursor = camT.z > 1.001 ? 'grab' : '';
 }
 
 // One pointer-drag state machine distinguishes click (select) from pan.
@@ -969,9 +1199,11 @@ canvas.addEventListener('pointermove', e => {
   if (!drag.panned &&
       Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
   drag.panned = true;
-  if (cam.z > 1.001) {
-    cam.x -= dx / cam.z;
-    cam.y -= dy / cam.z;
+  if (camT.z > 1.001) {
+    // Pan writes both the displayed and target cameras so the world tracks
+    // the pointer exactly (no easing lag while dragging).
+    cam.x -= dx / cam.z; cam.y -= dy / cam.z;
+    camT.x = cam.x; camT.y = cam.y;
     clampCam();
     canvas.style.cursor = 'grabbing';
   }
@@ -996,7 +1228,7 @@ canvas.addEventListener('wheel', e => {
 
 $('zoomIn').addEventListener('click', () => { zoomAt(W / 2, H / 2, 1.35); updateZoomUI(); });
 $('zoomOut').addEventListener('click', () => { zoomAt(W / 2, H / 2, 1 / 1.35); updateZoomUI(); });
-$('zoomFit').addEventListener('click', () => { cam.z = 1; cam.x = cam.y = 0; updateZoomUI(); });
+$('zoomFit').addEventListener('click', () => { camT.z = 1; camT.x = camT.y = 0; updateZoomUI(); });
 $('insClose').addEventListener('click', () => selectCar(null));
 
 export {
