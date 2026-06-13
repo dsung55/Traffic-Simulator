@@ -166,11 +166,18 @@ function paintAsphalt(g, top, rh, rnd) {
 }
 
 function paintLaneDashes(g, top) {
-  g.fillStyle = '#d9dade';
-  const dash = Math.max(9, cw() * 2), gap = dash * 1.7;
+  // US convention: a broken lane line is a 10 ft stripe with a 30 ft gap
+  // (1:3). 1 cell = 7.5 m ≈ 24.6 ft, so a stripe ≈ 0.41 cell and the gap ≈
+  // 1.22 cell. Scaled to pixels via cw(); clamped so it never disappears.
+  const c = cw();
+  const dash = Math.max(6, c * 0.41), gap = Math.max(14, c * 1.22);
   for (let l = 1; l < sim.lanes; l++) {
-    const y = top + l * LANE_H - 1;
-    for (let x = 4; x < W; x += dash + gap) g.fillRect(x, y, dash, 2);
+    const y = top + l * LANE_H - 1.25;
+    // soft cast shadow under the paint, then the bright stripe
+    for (let x = 6; x < W; x += dash + gap) {
+      g.fillStyle = 'rgba(0,0,0,.22)'; g.fillRect(x + 0.6, y + 1, dash, 2.5);
+      g.fillStyle = '#eef0f3'; g.fillRect(x, y, dash, 2.5);
+    }
   }
 }
 
@@ -303,8 +310,12 @@ function buildHighwayStatic(g) {
 
   // mainline asphalt + edge lines + dashes
   paintAsphalt(g, top, rh, rnd);
-  g.fillStyle = '#e6c84e'; g.fillRect(0, top + 1.5, W, 2);   // yellow left-edge line
-  g.fillStyle = '#e4e5e9'; g.fillRect(0, ry - 3.5, W, 2);    // white right-edge line
+  // Solid yellow edge line on the median (left) side, solid white on the right
+  // shoulder — both with a faint cast shadow so they sit ON the asphalt.
+  g.fillStyle = 'rgba(0,0,0,.20)'; g.fillRect(0, top + 3, W, 2.4);
+  g.fillStyle = '#f2cf3c'; g.fillRect(0, top + 2, W, 2.4);    // yellow left-edge line
+  g.fillStyle = 'rgba(0,0,0,.20)'; g.fillRect(0, ry - 2.6, W, 2.4);
+  g.fillStyle = '#eef0f3'; g.fillRect(0, ry - 3.8, W, 2.4);   // white right-edge line
   paintLaneDashes(g, top);
 
   // ── On-ramp approach roadway: a separate lane angling up from the lower-left
@@ -340,12 +351,13 @@ function buildHighwayStatic(g) {
   g.lineTo(reX, ry + 2); g.lineTo(reX - taper, ay);     // outer edge tapers up to boundary
   g.lineTo(rsX, ay);
   g.closePath(); g.fill();
-  // mainline right-edge line becomes a dotted "merge" line across the accel zone
+  // mainline right-edge line becomes a wide dotted channelizing line across the
+  // accel zone (short dots, big gaps — the MUTCD lane-drop / merge marking)
   g.fillStyle = '#3b3c41'; g.fillRect(rsX, ry - 4, reX - rsX, 4);
-  g.fillStyle = '#e4e5e9';
-  for (let x = rsX + 2; x < reX - 4; x += 13) g.fillRect(x, ry - 3.5, 7, 2);
+  g.fillStyle = '#eef0f3';
+  for (let x = rsX + 2; x < reX - 6; x += 18) g.fillRect(x, ry - 3.6, 9, 2.4);
   // accel-lane outer (white) edge line, following the taper into the boundary
-  g.strokeStyle = '#e4e5e9'; g.lineWidth = 2;
+  g.strokeStyle = '#eef0f3'; g.lineWidth = 2.4;
   g.beginPath();
   g.moveTo(rsX, ay - 1.5); g.lineTo(reX - taper, ay - 1.5); g.lineTo(reX, ry + 1);
   g.stroke();
@@ -377,10 +389,11 @@ function buildHighwayStatic(g) {
     g.moveTo(ox - mouth, ry); g.lineTo(ox + offDrop * 0.55, ry + offDrop);   // inner
     g.moveTo(ox, ry); g.lineTo(ox + offDrop * 0.55 + offW, ry + offDrop);    // outer
     g.stroke();
-    // mainline right-edge line becomes dotted across the exit mouth
+    // mainline right-edge line becomes a dotted channelizing line across the
+    // deceleration-lane opening (matches the on-ramp merge marking)
     g.fillStyle = '#3b3c41'; g.fillRect(ox - mouth, ry - 4, mouth + 2, 4);
-    g.fillStyle = '#e4e5e9';
-    for (let x = ox - mouth + 2; x < ox; x += 13) g.fillRect(x, ry - 3.5, 7, 2);
+    g.fillStyle = '#eef0f3';
+    for (let x = ox - mouth + 2; x < ox; x += 18) g.fillRect(x, ry - 3.6, 9, 2.4);
     // gore chevrons in the triangular nose just past the exit point
     g.strokeStyle = 'rgba(230,231,236,.6)'; g.lineWidth = 2;
     g.beginPath();
@@ -459,11 +472,19 @@ function drawHighwayScene() {
       ctx.save();
       ctx.translate(cTopX + (cBotX - cTopX) * t, ay + (appBot - ay) * t);
       ctx.rotate(ang);
-      ctx.fillStyle = 'rgba(0,0,0,.3)'; rr(ctx, -8.4, -3.6, 17.4, 9, 2.6);
-      ctx.fillStyle = '#a7adba'; rr(ctx, -9, -4.4, 17, 8.4, 2.8);
-      ctx.fillStyle = 'rgba(18,26,38,.75)'; rr(ctx, 0.4, -3.3, 4, 6.6, 1.4);
-      ctx.fillStyle = '#ffedb0'; ctx.fillRect(-8.8, -3.6, 1.4, 1.8);
-      ctx.fillRect(-8.8, 1.8, 1.4, 1.8);
+      // queue cars share the live-car proportions (≈half a lane wide) so the
+      // stack reads as the same fleet, with a little hue variety per slot
+      const ql = 17, qh = 7.4;
+      ctx.fillStyle = 'rgba(0,0,0,.32)'; rr(ctx, -ql / 2 + 0.6, -qh / 2 + 1.4, ql, qh, 2.4);
+      ctx.fillStyle = `hsl(${(i * 47) % 360},${i % 2 ? 12 : 34}%,${60 + (i % 3) * 6}%)`;
+      rr(ctx, -ql / 2, -qh / 2, ql, qh, 2.4);
+      // local frame: ang points DOWN-ramp, so the cars' direction of travel
+      // (up-ramp, toward the meter) is −x → windshield & headlights sit at −x
+      ctx.fillStyle = 'rgba(14,23,38,.78)'; rr(ctx, -4.6, -qh / 2 + 1, 4, qh - 2, 1.2); // windshield
+      ctx.fillStyle = 'rgba(255,255,255,.12)'; rr(ctx, -ql / 2 + 1, -qh / 2 + 0.8, ql - 2, qh * 0.32, 1);
+      ctx.fillStyle = '#ffedb0';               // headlights facing up-ramp
+      ctx.fillRect(-ql / 2 + 0.4, -qh / 2 + 0.8, 1.4, 1.6);
+      ctx.fillRect(-ql / 2 + 0.4, qh / 2 - 2.4, 1.4, 1.6);
       ctx.restore();
     }
   }
@@ -957,9 +978,10 @@ function carBody(g, x, yt, len, h) {
 }
 
 function drawCar(car, x, y, len, blink) {
-  // Width ≈ 62% of the lane (real car ≈ 1.8 m in a 3.7 m lane plus margin),
-  // capped so the body always reads clearly longer than wide.
-  const h = Math.min(LANE_H * 0.62, len * 0.56), yt = y - h / 2;
+  // Width ≈ 51% of the lane: a real car ≈ 1.8 m sits in a ~3.6 m lane, so the
+  // body leaves a believable margin of asphalt on each side rather than
+  // filling the lane. Capped against len so it always reads longer than wide.
+  const h = Math.min(LANE_H * 0.51, len * 0.52), yt = y - h / 2;
   car.drawH = h;
   // Detail gates use the ON-SCREEN size, so zooming in reveals wheels,
   // glass and mirrors even when the world-space body is small.
@@ -1024,8 +1046,9 @@ function drawCar(car, x, y, len, blink) {
 }
 
 function drawTruck(car, x, y, len, blink) {
-  // Wider than a car (~70% of the lane) and much longer; cab + boxed trailer.
-  const h = Math.min(LANE_H * 0.70, len * 0.27), yt = y - h / 2;
+  // Wider than a car (a tractor-trailer is ≈2.6 m vs 1.8 m) but still inside
+  // its lane; much longer, drawn as cab + boxed trailer.
+  const h = Math.min(LANE_H * 0.60, len * 0.26), yt = y - h / 2;
   car.drawH = h;
   const lod = len * cam.z;                             // on-screen size gates detail
 
