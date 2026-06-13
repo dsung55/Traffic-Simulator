@@ -1185,14 +1185,68 @@ function updateZoomUI() {
   canvas.style.cursor = camT.z > 1.001 ? 'grab' : '';
 }
 
-// One pointer-drag state machine distinguishes click (select) from pan.
-let drag = null;
+// Pointer input handles mouse, pen and multi-touch from one code path. One
+// pointer taps to select a vehicle or drags to pan (when zoomed in); two
+// pointers pinch-zoom and pan together, giving touch devices the camera control
+// a wheel gives a mouse. Tracking every active pointer is what makes the pinch
+// gesture possible — `touch-action:none` on the canvas hands us the raw touches.
+const pointers = new Map();   // active pointerId -> {x, y} in client coords
+let drag = null;              // single-pointer pan/select state
+let lastPinch = null;         // {dist, cx, cy} from the previous pinch sample
+
+// Distance between the two active pointers and their midpoint (in canvas-local
+// coordinates), the two quantities a pinch is built from.
+function pinchSample() {
+  const [a, b] = [...pointers.values()];
+  const r = canvas.getBoundingClientRect();
+  return {
+    dist: Math.hypot(a.x - b.x, a.y - b.y),
+    cx: (a.x + b.x) / 2 - r.left,
+    cy: (a.y + b.y) / 2 - r.top,
+  };
+}
+
+// Zoom the DISPLAYED camera immediately (and sync the target to it) so a pinch
+// tracks the fingers 1:1 instead of easing behind them — the same direct-
+// manipulation rule panning follows.
+function pinchZoom(sx, sy, factor) {
+  const wx = sx / cam.z + cam.x, wy = sy / cam.z + cam.y;
+  cam.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, cam.z * factor));
+  cam.x = wx - sx / cam.z;
+  cam.y = wy - sy / cam.z;
+  camT.z = cam.z; camT.x = cam.x; camT.y = cam.y;
+  clampCam();
+}
+
 canvas.addEventListener('pointerdown', e => {
-  if (e.button !== 0) return;
-  drag = { sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, panned: false };
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
   canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size >= 2) {
+    drag = null;                          // a second finger cancels tap/select
+    lastPinch = pinchSample();
+  } else {
+    drag = { sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, panned: false };
+  }
 });
 canvas.addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (pointers.size >= 2) {               // pinch-zoom + two-finger pan
+    const p = pinchSample();
+    if (lastPinch) {
+      if (lastPinch.dist > 0) pinchZoom(p.cx, p.cy, p.dist / lastPinch.dist);
+      cam.x -= (p.cx - lastPinch.cx) / cam.z;   // drag the midpoint with the fingers
+      cam.y -= (p.cy - lastPinch.cy) / cam.z;
+      camT.x = cam.x; camT.y = cam.y;
+      clampCam();
+      updateZoomUI();
+    }
+    lastPinch = p;
+    return;
+  }
+
   if (!drag) return;
   const dx = e.clientX - drag.lx, dy = e.clientY - drag.ly;
   drag.lx = e.clientX; drag.ly = e.clientY;
@@ -1208,16 +1262,26 @@ canvas.addEventListener('pointermove', e => {
     canvas.style.cursor = 'grabbing';
   }
 });
-canvas.addEventListener('pointerup', e => {
-  if (!drag) return;
-  const wasPan = drag.panned;
-  drag = null;
-  updateZoomUI();                       // restore grab/default cursor
-  if (wasPan) return;
-  const p = canvasPos(e);
-  selectCar(pickCar(p.x, p.y));
-});
-canvas.addEventListener('pointercancel', () => { drag = null; updateZoomUI(); });
+function endPointer(e) {
+  if (!pointers.has(e.pointerId)) return;
+  const wasSelect = drag && !drag.panned && pointers.size === 1;
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) lastPinch = null;
+  if (pointers.size === 1) {
+    // One finger remains after a pinch: keep panning from it, never select.
+    const [p] = pointers.values();
+    drag = { sx: p.x, sy: p.y, lx: p.x, ly: p.y, panned: true };
+  } else if (pointers.size === 0) {
+    drag = null;
+  }
+  updateZoomUI();                         // restore grab/default cursor
+  if (wasSelect) {
+    const p = canvasPos(e);
+    selectCar(pickCar(p.x, p.y));
+  }
+}
+canvas.addEventListener('pointerup', endPointer);
+canvas.addEventListener('pointercancel', endPointer);
 
 canvas.addEventListener('wheel', e => {
   e.preventDefault();

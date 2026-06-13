@@ -21,6 +21,7 @@ import { render, resizeCanvas, invalidateScene } from './render.js';
 import {
   bindUI, syncControls, updateMetrics, updateInspector, selectCar, updateLabels,
 } from './ui.js';
+import { applyDeviceClass } from './device.js';
 
 //──────────────────────────── Loops ────────────────────────────
 function start() {
@@ -28,6 +29,9 @@ function start() {
   // engine itself imports neither layer (no cycle, no DOM dependency); this is
   // the single seam where they meet.
   setEngineHooks({ selectCar, updateLabels, invalidateScene });
+  // Tag the body mobile/desktop before wiring the UI so the collapsible bars
+  // start in the right state for the device.
+  applyDeviceClass();
   bindUI();
   syncControls();
   resizeCanvas();

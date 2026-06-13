@@ -107,6 +107,14 @@
   </aside>
 
   <div class="topActions">
+    <button id="metricsToggle" class="btn metricsToggle" aria-expanded="false"
+            aria-controls="sidebar" title="Show live metrics">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+           stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M2 13.5h12M4.5 13V8M8 13V4M11.5 13V6.5"/>
+      </svg>
+      <span>Metrics</span>
+    </button>
     <span class="chip" id="statusChip" title="Active scenario and simulation state">
       <span class="chipDot"></span>
       <span id="statusScenario"></span>
@@ -127,6 +135,15 @@
 
 <!-- ── BOTTOM BAR: input controls ────────────────────────────────── -->
 <div id="bottombar" class="bar">
+  <!-- Mobile-only drag handle: collapses the controls so the road stays clear. -->
+  <button id="ctlToggle" class="barHandle" aria-expanded="false" aria-controls="controls"
+          title="Show controls">
+    <span class="barHandleGrip" aria-hidden="true"></span>
+    <span class="barHandleText">Controls</span>
+    <svg class="barHandleChev" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path d="M4 10l4-4 4 4"/>
+    </svg>
+  </button>
   <div id="controls">
 
     <section class="group">
