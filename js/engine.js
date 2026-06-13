@@ -776,12 +776,29 @@ function spawnLeftEdge(target) {
 }
 
 function releaseRampCar(entry) {
+  const car = makeCar(rampLaneIdx(), entry, 0);  // re-rolls profile & exit chance
   // Real merge behavior is speed matching: an unmetered driver rolls down the
   // ramp carrying speed (~30–40 mph, more on a longer acceleration lane) so it
   // arrives near mainline pace; a metered release launches from a standing
   // start at the stop bar (~20 mph by the merge area).
-  const v = sim.meterOn ? 1.2 : Math.min(2.4, 1.2 + rampLen() * 0.11);
-  const car = makeCar(rampLaneIdx(), entry, v);  // re-rolls profile & exit chance
+  const want = sim.meterOn ? 1.2 : Math.min(2.4, 1.2 + rampLen() * 0.11);
+  // Cap that desired entry speed by the comfortable-braking envelope to whatever
+  // is queued ahead in the acceleration lane — exactly as left-edge arrivals are
+  // capped (see spawnLeftEdge). A car rolling onto a backed-up accel lane must
+  // still be able to ease down to its leader's pace within the available gap, so
+  // it can never overrun a stopped merge queue and clip its tail.
+  const r = leaderInLane(car, rampLaneIdx(), N);
+  // Physical fit guard: the rolled vehicle's body (rear at the entry cell, front
+  // at entry + car.len) must clear the pocket ahead. A long truck can be longer
+  // than the entry gate's fixed clearance, so without this it would be placed
+  // straddling a car already queued in the accel lane. If it doesn't fit, leave
+  // it queued and try again next tick rather than clip the line.
+  if (r.lead && r.gap < car.prof.s0) return;
+  const eq = r.lead
+    ? Math.sqrt(r.leadV * r.leadV +
+                2 * car.prof.b * Math.max(0, r.gap - car.prof.s0))
+    : want;
+  car.v = car.startV = Math.max(0.4, Math.min(want, eq));
   sim.cars.push(car);
   sim.rampQueue--;
 }
