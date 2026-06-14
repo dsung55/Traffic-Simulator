@@ -1,5 +1,7 @@
 // Mutable simulation state plus the small derived helpers everything reads.
-import { SCENARIOS, MERGE_SHAPES, N, MPH_PER_CELL, TRUCK_OVERRIDE } from './config.js';
+import {
+  SCENARIOS, MERGE_SHAPES, DECEL_LANE_LEN, N, MPH_PER_CELL, TRUCK_OVERRIDE,
+} from './config.js';
 import { rng } from './rng.js';
 
 //──────────────────────────── State ────────────────────────────
@@ -33,10 +35,23 @@ const sim = {
 function cfg() { return SCENARIOS[sim.scenario]; }
 // Off-ramp is a user toggle on scenarios whose geometry supports one.
 function offRampActive() { return sim.exitRamp && cfg().offRampCell !== undefined; }
-function rampLaneIdx() { return sim.lanes; }                  // accel lane sits below mainline
+// One auxiliary grid row sits BELOW the mainline (index === sim.lanes). It hosts
+// BOTH speed-change lanes — the on-ramp ACCELERATION lane upstream and the
+// off-ramp DECELERATION lane downstream. They live in disjoint cell ranges far
+// apart on the road, so the single row never serves both at the same place.
+function rampLaneIdx() { return sim.lanes; }
 function rampLen() { return MERGE_SHAPES[sim.mergeShape].len; }
 function rampStart() { return cfg().onRampCell; }
 function rampEnd() { return cfg().onRampCell + rampLen() - 1; } // last usable accel-lane cell
+// Off-ramp deceleration lane: opens DECEL_LANE_LEN cells upstream of the gore
+// (offRampCell) and runs to it. Exit-bound drivers move into it EARLY and shed
+// speed gradually toward the advisory before peeling off at the gore.
+function decelStart() { return cfg().offRampCell - DECEL_LANE_LEN; } // where it opens
+function decelEnd() { return cfg().offRampCell; }                    // gore / departure point
+// Is `cell` within the on-ramp acceleration-lane footprint on the aux row?
+function inAccelLane(cell) { return cfg().hasRamp && cell >= rampStart() - 0.5 && cell <= rampEnd() + 0.5; }
+// Is `cell` within the off-ramp deceleration-lane footprint on the aux row?
+function inDecelLane(cell) { return offRampActive() && cell >= decelStart() - 0.5 && cell <= decelEnd() + 0.5; }
 // Jam spacing per vehicle is len (≈1.5 cells ≈ 11 m) + s0 (≈0.4 cells ≈ 3 m),
 // matching real stopped-queue spacing of ~7–8 m per car-length-equivalent;
 // the road could physically hold ~N/2 vehicles per lane, but we cap density
@@ -80,6 +95,7 @@ function weatherS0add() { return sim.weather === 'clear' ? 0 : sim.weather === '
 
 export {
   sim, cfg, offRampActive, rampLaneIdx, rampLen, rampStart, rampEnd,
+  decelStart, decelEnd, inAccelLane, inDecelLane,
   densityCap, effTarget, vmaxFloat, rollSpeedFactor, carV0,
   weatherTfactor, weatherS0add,
 };

@@ -10,6 +10,7 @@ import {
 } from './config.js';
 import {
   sim, cfg, offRampActive, rampLaneIdx, rampLen, rampStart, rampEnd,
+  decelStart, decelEnd, inAccelLane, inDecelLane,
   effTarget, vmaxFloat, rollSpeedFactor, carV0, weatherTfactor, weatherS0add,
 } from './state.js';
 import { rng } from './rng.js';
@@ -91,6 +92,7 @@ function makeCar(lane, cell, v) {
     signal: 0,                // blinker: -1 left (screen-up), +1 right (screen-down), 0 off
     tilt: 0, prevTilt: 0,     // body yaw (rad) while steering across, lerped by the renderer
     yieldFor: null, closeGap: false,  // per-tick cooperation flags (set in yieldPass)
+    zipperFor: null, zipperU: 0,      // per-tick zipper-merge flags (forced merges)
     profName, prof, isTruck,
     speedFactor: rollSpeedFactor(profName),
     exitChance, exiting: rng() < exitChance, exitDecided: false,
@@ -191,9 +193,14 @@ function virtualObstacle(car, lane, skipWall) {
     const d = INCIDENT_CELL - car.cell;
     if (d >= 0 && d < best) best = d;
   }
-  if (!skipWall && cfg().hasRamp && lane === rampLaneIdx()) {
-    // Wall at the end of the acceleration lane: the car must merge before it.
-    const d = (rampEnd() - car.cell);
+  if (!skipWall && cfg().hasRamp && lane === rampLaneIdx() && inAccelLane(car.cell)) {
+    // The single auxiliary row carries two speed-change lanes. A car in the
+    // ON-ramp acceleration lane must merge LEFT before the gore wall at
+    // rampEnd(). The OFF-ramp deceleration lane needs NO wall: an exiting car
+    // there eases to the advisory speed via the kinematic envelope below and
+    // departs onto the ramp the moment it reaches the gore (it never stops at
+    // it), so a wall would only dam the lane behind a car frozen on the gore.
+    const d = rampEnd() - car.cell;
     if (d >= 0 && d < best) best = d;
   }
   return best;
@@ -258,14 +265,16 @@ function accelInLane(car, lane, skipWall) {
     }
   }
 
-  // Exit-ramp approach: a driver committed to the off-ramp and already in the
-  // exit lane sheds speed GRADUALLY toward the ramp advisory speed, following
-  // a comfortable kinematic envelope v(d) = sqrt(v_ramp² + 2·b·d) instead of
-  // sailing into the gore at full highway speed. (Real drivers begin slowing
-  // ~10 s upstream of an exit and take the ramp at the advisory speed.)
+  // Exit-ramp approach: a driver committed to the off-ramp and now in the
+  // DECELERATION lane sheds speed GRADUALLY toward the ramp advisory, following
+  // a comfortable kinematic envelope v(d) = sqrt(v_ramp² + 2·b·d) toward the
+  // gore (decelEnd) instead of sailing into it at full highway speed. The long
+  // auxiliary decel lane is where the slowing happens, so through traffic in
+  // the mainline is never held up by an exiting car. (Real drivers move into
+  // the deceleration lane first, THEN slow to the advisory before the gore.)
   if (car.exiting && car.exitDecided && offRampActive() &&
-      lane === sim.lanes - 1 && car.lane === sim.lanes - 1) {
-    const d = cfg().offRampCell - car.cell;
+      lane === rampLaneIdx() && car.lane === rampLaneIdx() && inDecelLane(car.cell)) {
+    const d = decelEnd() - car.cell;
     if (d > 0) {
       const vAllow = Math.sqrt(EXIT_RAMP_SPEED * EXIT_RAMP_SPEED +
                                2 * car.prof.b * d);
@@ -382,15 +391,29 @@ function gapCheck(car, target, urgency) {
 }
 
 // How pressed is this driver to complete its pending change? 0 = relaxed.
+// Urgency grows sharply as the deadline (a wall or a gore point) nears, letting
+// a driver accept progressively tighter pockets so traffic never wedges solid.
 function lcUrgency(car) {
   let u = 0;
-  if (cfg().hasRamp && (car.lane === rampLaneIdx() || car.lane2 === rampLaneIdx())) {
+  // On-ramp: an acceleration-lane car must merge LEFT before the gore wall.
+  if (cfg().hasRamp && (inAccelLane(car.cell) || inAccelLane(car.cell - 0.5)) &&
+      (car.lane === rampLaneIdx() || car.lane2 === rampLaneIdx())) {
     const d = rampEnd() - car.cell;          // distance to the end-of-ramp wall
-    u = Math.max(u, d < 2 ? 0.75 : d < 4 ? 0.55 : d < 7 ? 0.35 : 0.15);
+    u = Math.max(u, d < 2 ? 0.95 : d < 4 ? 0.75 : d < 7 ? 0.5 : 0.25);
   }
-  if (car.exiting && offRampActive() && car.lane < sim.lanes - 1) {
-    const d = cfg().offRampCell - car.cell;
-    if (d >= 0) { if (d < 5) u = Math.max(u, 0.6); else if (d < 12) u = Math.max(u, 0.35); }
+  // Off-ramp, step 1: an exiting car still in an inner mainline lane must reach
+  // the rightmost lane before the deceleration lane opens (decelStart), where it
+  // can move over into the aux row. The deadline is decelStart, not the gore.
+  if (car.exiting && offRampActive() && car.lane < sim.lanes - 1 && car.lane !== rampLaneIdx()) {
+    const d = decelStart() - car.cell;
+    if (d >= 0) { if (d < 6) u = Math.max(u, 0.6); else if (d < 14) u = Math.max(u, 0.35); }
+    else u = Math.max(u, 0.6);               // already past the opening: hurry
+  }
+  // Off-ramp, step 2: an exiting car in the rightmost main lane, now alongside
+  // the open deceleration lane, must move RIGHT into it before the gore.
+  if (car.exiting && offRampActive() && car.lane === sim.lanes - 1 && inDecelLane(car.cell)) {
+    const d = decelEnd() - car.cell;
+    u = Math.max(u, d < 4 ? 0.8 : d < 9 ? 0.5 : 0.3);
   }
   if (sim.incident && cfg().hasIncident && car.lane === sim.lanes - 1) {
     const d = INCIDENT_CELL - car.cell;
@@ -470,7 +493,10 @@ function laneChangeStep() {
     r.lane !== lane ||
     Math.abs(r.cell - cell) > (r.len + len) / 2 + MERGE_MARGIN + 0.5);
 
-  for (const car of sim.cars) { car.yieldFor = null; car.closeGap = false; }
+  for (const car of sim.cars) {
+    car.yieldFor = null; car.closeGap = false;
+    car.zipperFor = null; car.zipperU = 0;
+  }
 
   for (const car of sim.cars) {
     const lc = car.lc;
@@ -503,20 +529,47 @@ function laneChangeStep() {
 
     if (car.cool > 0) { car.cool -= 1; continue; }
 
-    // Ramp/accel-lane cars: their only move is to merge LEFT into the rightmost
-    // main lane, and they MUST get it done before the wall — forced, no timeout.
+    // ── Auxiliary-row cars (index === rampLaneIdx()) ──
     if (cfg().hasRamp && car.lane === rampLaneIdx()) {
-      startSignal(car, sim.lanes - 1, true);
+      // On-ramp ACCELERATION lane: the only move is to zipper LEFT into the
+      // rightmost main lane, and it MUST be done before the gore wall — forced,
+      // no timeout. (A car in the off-ramp DECELERATION lane stays put: it rides
+      // the aux row down to the gore and departs there, no lane change.)
+      if (inAccelLane(car.cell)) {
+        startSignal(car, sim.lanes - 1, true);
+      }
       continue;
     }
     if (sim.lanes < 2) continue;
 
-    // Exiting cars (interchange) weave toward the rightmost lane for the ramp.
-    // They accept a real disadvantage (up to ≈0.75 m/s² = 0.10 cells/s²) to
-    // line up the exit — the one legitimate reason to move into a slower lane.
-    if (car.exiting && car.lane < sim.lanes - 1) {
+    // ── Off-ramp, step 2: an exiting car in the rightmost main lane, now
+    //    alongside the open deceleration lane, peels RIGHT into the aux row so it
+    //    can shed speed off the through lane. Forced — it commits to the exit.
+    //    Only START the move while there is still room to finish it before the
+    //    gore (a slide takes ~4.5 s); a car that reaches the last few cells of
+    //    the diverge without having begun has effectively missed the exit and
+    //    rides on through (handled at the gore in speedAndMoveStep).
+    if (car.exiting && offRampActive() && car.lane === sim.lanes - 1 &&
+        inDecelLane(car.cell) && car.cell <= decelEnd() - 4) {
+      startSignal(car, rampLaneIdx(), true);
+      continue;
+    }
+
+    // ── Off-ramp, step 1: an exiting car still in an inner lane weaves toward
+    //    the rightmost main lane to line up for the deceleration lane. It accepts
+    //    a real disadvantage (up to ≈0.75 m/s² = 0.10 cells/s²) to do so — the one
+    //    legitimate reason to move into a slower lane — and grows ever more eager
+    //    as the diverge nears. These weaves stay DISCRETIONARY (not forced)
+    //    between main lanes: the gap-wait/urgency machinery already lets the
+    //    driver accept tight pockets near the gore, while keeping the abort
+    //    safety net so a collapsing pocket never leaves it clipping a neighbour.
+    //    A driver that simply can't find room misses the exit gracefully.
+    if (car.exiting && offRampActive() && car.lane < sim.lanes - 1) {
+      const near = decelStart() - car.cell < 14;    // close to the diverge
       const g = mobilDesire(car, car.lane + 1);
-      if (g !== null && g > -0.10) { startSignal(car, car.lane + 1, false); continue; }
+      if (g !== null && (g > -0.10 || (near && g > -0.6))) {
+        startSignal(car, car.lane + 1, false); continue;
+      }
     }
 
     // Discretionary MOBIL: evaluate both neighbours, take the best gain. The
@@ -535,24 +588,37 @@ function laneChangeStep() {
   yieldPass();
 }
 
-// Cooperative yielding: a follower in the target lane that sees a blinker ahead
-// reacts according to temperament. Courteous drivers (politeness ≥ .25 — normal
-// and passive) ease off to open the gap; hot-headed ones (politeness < .1 —
-// aggressive) close it instead. Flags are consumed by the integrator this tick.
+// Cooperative yielding / zipper merge: a follower in the target lane that sees a
+// blinker ahead reacts according to temperament AND to how badly the merger
+// needs in. For a DISCRETIONARY change, courteous drivers (politeness ≥ .25)
+// ease off and hot-heads (politeness < .1) close the gap, as before. For a
+// FORCED merge at a lane drop / gore (ramp accel lane, off-ramp diverge) the
+// follower ZIPPERS: it actively opens a gap proportional to the merger's
+// urgency — a true alternating merge that even an aggressive driver honours,
+// because at a real zipper point you cannot simply refuse the car merging in.
 function yieldPass() {
   for (const car of sim.cars) {
     const lc = car.lc;
     if (!lc) continue;
     const watching = lc.phase === 'signal' ||
-                     (lc.phase === 'execute' && car.laneT < 0.35);
+                     (lc.phase === 'execute' && car.laneT < 0.40);
     if (!watching) continue;
-    const fol = followerInLane(car, lc.target, 9);
+    const fol = followerInLane(car, lc.target, 11);
     if (!fol.foll || fol.foll.lc) continue;   // busy with their own manoeuvre
     // Already alongside (bumper gap gone): no point braking — drive on past
     // and let the merger slot in behind instead.
     if (fol.gap < 0.2) continue;
-    if (fol.foll.prof.politeness >= 0.25) fol.foll.yieldFor = car;
-    else if (fol.foll.prof.politeness < 0.1) fol.foll.closeGap = true;
+    if (lc.forced) {
+      // Zipper: brake to open room for the merger. Urgency (set by the merger's
+      // proximity to its wall/gore) scales how firmly the follower lifts off.
+      const u = lcUrgency(car);
+      fol.foll.zipperFor = car;
+      fol.foll.zipperU = Math.max(fol.foll.zipperU || 0, Math.max(0.2, u));
+    } else if (fol.foll.prof.politeness >= 0.25) {
+      fol.foll.yieldFor = car;
+    } else if (fol.foll.prof.politeness < 0.1) {
+      fol.foll.closeGap = true;
+    }
   }
 }
 
@@ -614,7 +680,24 @@ function speedAndMoveStep() {
       // straddling body never clips traffic in either. The lane being left
       // ignores the end-of-ramp wall (the body is already escaping it).
       if (car.lane2 != null) a2 = Math.min(a2, accelInLane(car, car.lane2, true));
-      if (car.yieldFor) {
+      if (car.zipperFor) {
+        // Zipper merge: open a real gap for a FORCED merger (ramp/exit) ahead.
+        // Treat it as a leader needing a target headway that grows with the
+        // merger's urgency, and brake toward that — firmly when urgent, but
+        // always bounded below emergency braking so the follower never stops
+        // dead. This is the alternation that lets a packed lane still accept a
+        // merge: each blinking merger pries open one slot behind it.
+        const zf = car.zipperFor;
+        const g = (zf.cell - car.cell) - (car.len || CAR_LEN);
+        if (g > 0.05) {
+          // Desired buffer behind the merger: ~1 car length, more when urgent.
+          const want = 1.0 + 1.8 * car.zipperU;
+          const az = idmAccel(car, Math.max(0.3, g - want), Math.min(zf.v, car.v));
+          // Bound the zipper brake: ~3 m/s² relaxed, up to ~5 m/s² when wedged.
+          const floor = -B_SAFE * (0.8 + 1.0 * car.zipperU);
+          if (az < a2) a2 = Math.max(az, floor);
+        }
+      } else if (car.yieldFor) {
         // Courteous: ease off toward the signalling car ahead as if it were a
         // leader wanting an extra courtesy buffer — gentle deceleration only,
         // only while the merger is genuinely ahead and we'd otherwise keep
@@ -673,26 +756,38 @@ function speedAndMoveStep() {
         car.exiting = rng() < car.exitChance;
         car.exitDecided = true;
       }
-      // Off-ramp departure: an exiting car in the rightmost lane peels off. One
-      // that crosses the gore point still stuck in an inner lane has MISSED the
-      // exit — it gives up (blinker off) and drives on like everyone else.
-      const dExit = fwd(prev, cfg().offRampCell);
+      // Off-ramp departure: an exiting car that REACHES the gore (decelEnd) down
+      // in the DECELERATION lane peels off onto the ramp and is gone. This is a
+      // PROXIMITY test, not a crossing test: at the gore the car is rolling at
+      // the ramp advisory (~30 mph), and it must leave the moment its nose gets
+      // there — it never stops AT the gore (that would dam the whole decel lane).
+      if (car.exiting && !wrapped && (car.lane === rampLaneIdx() || car.lane2 === rampLaneIdx())
+          && car.cell + car.len >= decelEnd()) {
+        remove.add(i); sim.rampQueue++; continue;       // committed to the ramp: gone
+      }
+      // A car that crosses the gore still in a main lane has MISSED the exit — it
+      // gives up (blinker off) and drives on like everyone else. Abandon any
+      // half-started slide toward the (now passed) deceleration lane so it can't
+      // drift into the aux row downstream of the gore.
+      const dExit = fwd(prev, decelEnd());
       if (car.exiting && movedDist >= dExit && dExit >= 0 && !wrapped) {
-        if (car.lane === sim.lanes - 1 && car.lane2 == null) {
-          remove.add(i); sim.rampQueue++; continue;
-        }
         car.exiting = false;
+        if (car.lc && car.lc.target === rampLaneIdx() && car.lane !== rampLaneIdx()) {
+          car.lc = null; car.signal = 0; car.lane2 = null;
+          car.laneT = 1; car.laneFrom = car.laneTo = car.laneCoord = car.lane;
+        }
       }
     }
 
     // Stop event (city metric): came to rest this tick at/near a light.
     if (car.v < 0.05 && car.startV >= 0.05) sim.evStops.push(sim.time);
 
-    // Right-edge outflow: main-lane cars that wrapped past the seam have exited.
-    // Ramp/accel-lane cars are still merging and are kept until they reach a
-    // main lane (they can't realistically wrap before merging on this short ring,
-    // but guard anyway).
-    if (wrapped && (!cfg().hasRamp || car.lane < sim.lanes)) remove.add(i);
+    // Right-edge outflow: any car that wrapped past the seam has driven off the
+    // far end of the simulated road and is gone. The on-ramp acceleration lane
+    // sits far upstream so its cars never reach the edge before merging; the only
+    // aux-row car that could is an off-ramp straggler that missed its gore, and
+    // it too belongs off the road — never teleported back to the phantom left.
+    if (wrapped) remove.add(i);
   }
   if (remove.size) sim.cars = sim.cars.filter((_, i) => !remove.has(i));
 }
