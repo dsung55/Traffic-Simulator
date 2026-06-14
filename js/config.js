@@ -9,9 +9,18 @@ const MPH_PER_CELL = 16.8;     // 1 cell/s in mph
 const TICK_MS = 200;           // wall-clock ms per sim tick
 const SUBSTEPS = 5;            // IDM integration sub-steps per tick (dt = 1/5 s)
 const SUB_DT = 1 / SUBSTEPS;
-const SENSOR_CELL = 63;        // throughput sensor (old 150)
-const INCIDENT_CELL = 42;      // lane-closure obstacle (old 100)
-const EXIT_DECIDE_CELL = 9;    // where cars commit to taking the off-ramp (old 20)
+// Interchange layout (cars flow LEFT→RIGHT, so smaller cell = upstream):
+//   ┌ entry ┐┌── on-ramp accel lane ──┐┌─ weave ─┐┌── off-ramp decel lane ──┐┌ exit ┐
+//   0       14                       ~31         54                        70       84
+// The ON-ramp (entrance) sits UPSTREAM of the OFF-ramp (exit), as on a real
+// freeway. The sensor and incident both land on the open weaving mainline
+// BETWEEN the two ramps so neither sits on top of a merge/diverge zone.
+const SENSOR_CELL = 46;        // throughput sensor — open mainline between ramps
+const INCIDENT_CELL = 38;      // lane-closure obstacle — open mainline between ramps
+// EXIT_DECIDE_CELL: where a driver commits to the off-ramp. It sits a long way
+// upstream of the diverge so a committed driver has room to weave right and ease
+// into the deceleration lane before the gore.
+const EXIT_DECIDE_CELL = 40;
 const ROAD_MILES = N * 7.5 / 1609.34;
 // Physical vehicle lengths in CELLS. Every gap/collision computation uses the
 // per-car `car.len` rolled in makeCar (small variance around these baselines);
@@ -20,11 +29,26 @@ const ROAD_MILES = N * 7.5 / 1609.34;
 const CAR_LEN = 1.5;           // baseline car length (cells)
 const TRUCK_LEN = 3.75;        // baseline truck length (cells)
 
+// Acceleration-lane geometry. A merging driver is released onto the auxiliary
+// lane at rampStart(), speeds up alongside the mainline, and must zipper-merge
+// left before the gore wall at rampEnd(). Lengths reference real US freeway
+// practice (AASHTO Green Book speed-change lane lengths; 1 cell = 7.5 m):
+//   • taper    ≈ 60 m — short taper-type entrance: little room, an early/forced
+//                       merge near mainline speed (think a tight cloverleaf).
+//   • zipper   ≈ 90 m — a moderate parallel lane long enough to truly alternate.
+//   • parallel ≈ 135 m — a generous parallel acceleration lane; the car reaches
+//                        mainline speed with a comfortable choice of gaps.
 const MERGE_SHAPES = {
-  taper:    { len: 5 },    // standard acceleration taper (old 10)
-  zipper:   { len: 7 },    // alternating-priority zipper, relaxed rear gap (old 15)
-  parallel: { len: 11 },   // long parallel acceleration lane (old 25)
+  taper:    { len: 8 },    // standard taper-type acceleration lane (≈60 m)
+  zipper:   { len: 12 },   // parallel zipper lane, alternating priority (≈90 m)
+  parallel: { len: 18 },   // long parallel acceleration lane (≈135 m)
 };
+// Off-ramp deceleration lane: a long auxiliary lane to the right that OPENS this
+// many cells upstream of the gore (offRampCell). Exit-bound drivers move into it
+// early and shed speed gradually toward the ramp advisory before peeling off —
+// ≈18 cells ≈ 135 m, in line with AASHTO deceleration-lane lengths for a
+// freeway-speed exit easing to a ~30 mph ramp.
+const DECEL_LANE_LEN = 18;
 
 // Per-profile driving parameters, expressed as IDM + MOBIL knobs.
 //
@@ -94,7 +118,10 @@ const SCENARIOS = {
     desc: 'Open mainline: traffic enters at the left edge and exits at the right. A metered on-ramp feeds a second stream; an optional exit ramp lets a share of drivers peel off early.',
     laneOptions: [2, 3, 4], defaultLanes: 3,
     speedRange: [35, 75], speedStep: 5, defaultSpeed: 65,
-    hasRamp: true, onRampCell: 59, offRampCell: 25,
+    // ON-ramp upstream (entrance at cell 14), OFF-ramp downstream (gore at cell
+    // 70) — entrance first, exit after, exactly as on a real freeway. The
+    // deceleration lane opens DECEL_LANE_LEN cells before the gore (cell 52).
+    hasRamp: true, onRampCell: 14, offRampCell: 70,
     hasIncident: true, lightCells: null, style: 'highway',
   },
   city: {
@@ -109,6 +136,6 @@ const SCENARIOS = {
 
 export {
   N, MPH_PER_CELL, TICK_MS, SUBSTEPS, SUB_DT, SENSOR_CELL, INCIDENT_CELL,
-  EXIT_DECIDE_CELL, ROAD_MILES, CAR_LEN, TRUCK_LEN, MERGE_SHAPES, PROFILES,
-  TRUCK_OVERRIDE, B_SAFE, MERGE_MARGIN, EXIT_RAMP_SPEED, SCENARIOS,
+  EXIT_DECIDE_CELL, ROAD_MILES, CAR_LEN, TRUCK_LEN, MERGE_SHAPES, DECEL_LANE_LEN,
+  PROFILES, TRUCK_OVERRIDE, B_SAFE, MERGE_MARGIN, EXIT_RAMP_SPEED, SCENARIOS,
 };

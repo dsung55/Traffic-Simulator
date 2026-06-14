@@ -5,13 +5,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tick, applyLaneCount } from '../js/engine.js';
-import { sim, rampLaneIdx } from '../js/state.js';
+import { sim, rampLaneIdx, rampStart } from '../js/state.js';
 import { resetWorld, placeCar } from './helpers.js';
 
 test('ramp car: forced merge with signal phase BEFORE any lateral movement', () => {
   resetWorld();
   // Alone on the accel lane (ramp lane = 3), clear mainline: textbook merge.
-  const car = placeCar({ lane: rampLaneIdx(), cell: 59, v: 2 });
+  // Placed at the on-ramp entry so the accel-lane wall/urgency logic applies.
+  const car = placeCar({ lane: rampLaneIdx(), cell: rampStart(), v: 2 });
   tick();
   assert.ok(car.lc, 'plan starts immediately on the accel lane');
   assert.ok(car.lc.forced, 'ramp merges are forced');
@@ -31,7 +32,7 @@ test('ramp car: forced merge with signal phase BEFORE any lateral movement', () 
 
 test('execute phase: car immediately leads the target lane and straddles the old one', () => {
   resetWorld();
-  const car = placeCar({ lane: rampLaneIdx(), cell: 59, v: 2 });
+  const car = placeCar({ lane: rampLaneIdx(), cell: rampStart(), v: 2 });
   let sawStraddle = false;
   for (let i = 0; i < 10; i++) {
     tick();

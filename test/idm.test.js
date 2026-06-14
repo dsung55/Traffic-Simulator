@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { idmAccel, accelInLane } from '../js/engine.js';
-import { carV0, sim } from '../js/state.js';
+import { carV0, sim, rampEnd, rampLaneIdx } from '../js/state.js';
 import { B_SAFE, INCIDENT_CELL } from '../js/config.js';
 import { resetWorld, placeCar } from './helpers.js';
 
@@ -85,8 +85,9 @@ test('incident blocks ONLY the rightmost lane', () => {
 });
 
 test('end-of-ramp wall brakes accel-lane cars; skipWall ignores it', () => {
-  resetWorld(); // highway: ramp at 59, taper len 5 => wall at cell 63
-  const car = placeCar({ lane: 3, cell: 61.5, v: 3 }); // ramp lane = sim.lanes = 3
-  assert.ok(accelInLane(car, 3) < -0.5, 'should brake for the wall');
-  assert.ok(accelInLane(car, 3, true) > 0, 'skipWall should see open road');
+  resetWorld(); // highway: on-ramp accel lane ends at rampEnd() (the gore wall)
+  // Sit just shy of the gore wall in the acceleration lane (ramp lane = sim.lanes).
+  const car = placeCar({ lane: rampLaneIdx(), cell: rampEnd() - 1.5, v: 3 });
+  assert.ok(accelInLane(car, car.lane) < -0.5, 'should brake for the wall');
+  assert.ok(accelInLane(car, car.lane, true) > 0, 'skipWall should see open road');
 });

@@ -5,6 +5,7 @@
 import { N, TICK_MS, INCIDENT_CELL, SENSOR_CELL, CAR_LEN } from './config.js';
 import {
   sim, cfg, offRampActive, rampLaneIdx, rampStart, rampEnd,
+  decelStart, decelEnd,
 } from './state.js';
 import { lightState, LANE_CHANGE_TIME } from './engine.js';
 import { selectCar } from './ui.js';
@@ -370,31 +371,45 @@ function buildHighwayStatic(g) {
   }
   g.stroke();
 
-  // ── Off-ramp (interchange): a wedge peeling off the rightmost mainline lane to
-  //    the lower-right, opening at the boundary (ry) and dropping below the road.
+  // ── Off-ramp (interchange): a long parallel DECELERATION lane in the aux row,
+  //    cells decelStart()..decelEnd(). Exit-bound cars move over EARLY into this
+  //    box (same [ry, ay] band the accel lane uses, just downstream), ease down
+  //    its length, and peel off at the gore (decelEnd) where it drops away to the
+  //    lower-right. The painted footprint is tied to the same cells the engine
+  //    uses, so cars drive exactly on it.
   if (offRampActive()) {
-    const ox = cfg().offRampCell * c;                  // exit gore point on the boundary
+    const dsX = decelStart() * c;                      // where the decel lane opens
+    const ox = decelEnd() * c;                         // gore / departure point
     const offDrop = Math.min(LANE_H * 2.4, (H - ay) * 0.5);
     const offW = LANE_H;                               // one ramp lane wide
-    const mouth = LANE_H * 1.6;                         // how far back the mouth opens
-    g.fillStyle = '#36373c';
+    const open = Math.min(LANE_H * 1.3, (ox - dsX) * 0.4); // opening taper length
+    // deceleration-lane asphalt: an opening wedge then a full-width parallel lane
+    g.fillStyle = '#3b3c41';
     g.beginPath();
-    g.moveTo(ox - mouth, ry); g.lineTo(ox, ry);        // mouth along the boundary
-    g.lineTo(ox + offDrop * 0.55 + offW, ry + offDrop);
-    g.lineTo(ox + offDrop * 0.55, ry + offDrop);
-    g.closePath(); g.fill();
-    // ramp edge lines (white)
+    g.moveTo(dsX, ry);                                  // inner edge starts at the boundary
+    g.lineTo(ox, ry);
+    g.lineTo(ox + offDrop * 0.55, ry + offDrop);        // inner edge drops down the ramp
+    g.lineTo(ox + offDrop * 0.55 + offW, ry + offDrop); // outer edge of the ramp throat
+    g.lineTo(ox, ay);                                   // back up to the lane's outer edge
+    g.lineTo(dsX + open, ay);                           // along the outer edge…
+    g.closePath(); g.fill();                            // …to the opening taper
+    // mainline right-edge line becomes a dotted channelizing line the whole
+    // length of the deceleration lane (MUTCD diverge marking)
+    g.fillStyle = '#3b3c41'; g.fillRect(dsX, ry - 4, ox - dsX, 4);
+    g.fillStyle = '#eef0f3';
+    for (let x = dsX + 2; x < ox - 6; x += 18) g.fillRect(x, ry - 3.6, 9, 2.4);
+    // decel-lane outer (white) edge line: opening taper, then straight to the gore
+    g.strokeStyle = '#eef0f3'; g.lineWidth = 2.4;
+    g.beginPath();
+    g.moveTo(dsX, ry + 1); g.lineTo(dsX + open, ay - 1.5); g.lineTo(ox, ay - 1.5);
+    g.stroke();
+    // ramp throat edge lines beyond the gore (white)
     g.strokeStyle = '#caccd2'; g.lineWidth = 1.8;
     g.beginPath();
-    g.moveTo(ox - mouth, ry); g.lineTo(ox + offDrop * 0.55, ry + offDrop);   // inner
-    g.moveTo(ox, ry); g.lineTo(ox + offDrop * 0.55 + offW, ry + offDrop);    // outer
+    g.moveTo(ox, ry); g.lineTo(ox + offDrop * 0.55, ry + offDrop);           // inner
+    g.moveTo(ox, ay); g.lineTo(ox + offDrop * 0.55 + offW, ry + offDrop);    // outer
     g.stroke();
-    // mainline right-edge line becomes a dotted channelizing line across the
-    // deceleration-lane opening (matches the on-ramp merge marking)
-    g.fillStyle = '#3b3c41'; g.fillRect(ox - mouth, ry - 4, mouth + 2, 4);
-    g.fillStyle = '#eef0f3';
-    for (let x = ox - mouth + 2; x < ox; x += 18) g.fillRect(x, ry - 3.6, 9, 2.4);
-    // gore chevrons in the triangular nose just past the exit point
+    // gore chevrons filling the triangular nose just past the gore point
     g.strokeStyle = 'rgba(230,231,236,.6)'; g.lineWidth = 2;
     g.beginPath();
     for (let k = 1; k <= 3; k++) {
@@ -402,7 +417,7 @@ function buildHighwayStatic(g) {
       g.moveTo(ox + d * 0.55, ry + d); g.lineTo(ox + d * 0.55 + d * 0.5, ry + d + 5);
     }
     g.stroke();
-    // EXIT board on a post beside the ramp
+    // EXIT board on a post beside the ramp throat
     const sgx = ox + offDrop * 0.55 + offW + 6, sgy = ry + offDrop * 0.55;
     g.fillStyle = '#3c3e45'; g.fillRect(sgx + 16, sgy + 17, 2, offDrop * 0.45);
     g.fillStyle = '#0f7a3d'; rr(g, sgx, sgy, 36, 17, 2);
@@ -417,15 +432,19 @@ function buildHighwayStatic(g) {
   const railY = ay + 11;                               // rail sits below the accel lane
   const gaps = [[rsX - appRun - 10, reX + 6]];          // on-ramp + accel-lane gap
   if (offRampActive()) {
-    const ox = cfg().offRampCell * c;
-    gaps.push([ox - LANE_H * 1.8, ox + LANE_H * 2.6]);
+    // gap the rail along the whole decel lane + the ramp throat past the gore
+    gaps.push([decelStart() * c - 6, decelEnd() * c + LANE_H * 2.6]);
   }
   for (const s of railSegs(0, W, gaps)) drawGuardrail(g, s[0], s[1], railY);
 
   if (sim.weather === 'rain') {
     paintWetSheen(g, top, rh);
-    g.fillStyle = 'rgba(170,195,235,.10)';            // accel lane gets the glaze too
+    g.fillStyle = 'rgba(170,195,235,.10)';            // speed-change lanes glazed too
     g.fillRect(rsX, ry, reX - rsX, LANE_H);
+    if (offRampActive()) {
+      const dsX = decelStart() * c;
+      g.fillRect(dsX, ry, decelEnd() * c - dsX, LANE_H);
+    }
   }
   drawSensor(g, top, rh);
 }
@@ -773,8 +792,10 @@ function updateCarTracking() {
       const c = cw();
       for (const car of gone) {
         if (car.drawX === undefined) continue;
-        if (offRampActive() && car.lane === sim.lanes - 1 &&
-            Math.abs((car.drawX + car.drawLen) - cfg().offRampCell * c) < c * 4) {
+        // Off-ramp departure: a car that vanished from the DECELERATION lane (aux
+        // row) at the gore drives off down the ramp as a curving ghost.
+        if (offRampActive() && (car.lane === rampLaneIdx() || car.lane2 === rampLaneIdx()) &&
+            Math.abs((car.drawX + car.drawLen) - decelEnd() * c) < c * 5) {
           ghosts.push({ car, x: car.drawX, y: car.drawY, rot: 0, alpha: 1, t: 0, kind: 'exit' });
         } else if (car.drawX + car.drawLen > (N - 6) * c) {
           ghosts.push({ car, x: car.drawX, y: car.drawY, rot: 0, alpha: 1, t: 0, kind: 'edge' });
