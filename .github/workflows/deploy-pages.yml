@@ -1,0 +1,48 @@
+# Publishes the static site (index.html + js/ + style.css at the repo root) to
+# GitHub Pages on every push to main. The project has no build step — it's plain
+# HTML + ES-module JS served as-is — so the whole repo root is uploaded as the
+# Pages artifact and deployed.
+#
+# NOTE: for this workflow to be the deployer, set Settings → Pages → "Source" to
+# "GitHub Actions". (If Pages is left on "Deploy from a branch", main already
+# publishes on its own and the deploy step here is redundant.)
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # allow manual runs from the Actions tab
+
+# Least-privilege token plus the OIDC claim the Pages deploy needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deploys at once; let an in-flight one finish (don't cancel a
+# live publish mid-flight).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site artifact (repo root)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
