@@ -5,7 +5,7 @@
 import { N, TICK_MS, INCIDENT_CELL, SENSOR_CELL, CAR_LEN } from './config.js';
 import {
   sim, cfg, offRampActive, rampLaneIdx, rampStart, rampEnd,
-  decelStart, decelEnd,
+  decelStart, decelEnd, vmaxFloat,
 } from './state.js';
 import { lightState, LANE_CHANGE_TIME } from './engine.js';
 import { selectCar } from './ui.js';
@@ -35,7 +35,13 @@ let W = 0, H = 380, dpr = 1;
 // manipulation must track the pointer 1:1, never lag behind it).
 const cam = { z: 1, x: 0, y: 0 };
 const camT = { z: 1, x: 0, y: 0 };
-const ZOOM_MIN = 1, ZOOM_MAX = 6;
+// ZOOM_MAX raised to 14×: at 1× the whole 84-cell ring fills the width (one car
+// ≈ 25 px), so 6× left a merge/jam still spanning most of the screen. At 14× a
+// single car is ~350 px and an 8–18-cell speed-change lane fills the view, which
+// is what "zoom in to study a few cars / a merge / a jam" actually needs. The
+// vehicle renderer gates detail on len×cam.z, so the extra range just blooms
+// more legible detail (wheels, glass, seams) rather than upscaling a blur.
+const ZOOM_MIN = 1, ZOOM_MAX = 14;
 function clampOne(c) {
   c.z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, c.z));
   c.x = Math.min(W - W / c.z, Math.max(0, c.x));
@@ -53,7 +59,7 @@ function zoomAt(sx, sy, factor) {
 }
 // Ease the displayed camera toward the target (called once per frame).
 function easeCamera(dtMs) {
-  const k = 1 - Math.exp(-dtMs / 90);          // ~90 ms time constant
+  const k = 1 - Math.exp(-dtMs / 75);          // ~75 ms time constant (snappy glide)
   cam.z += (camT.z - cam.z) * k;
   cam.x += (camT.x - cam.x) * k;
   cam.y += (camT.y - cam.y) * k;
@@ -63,6 +69,132 @@ function easeCamera(dtMs) {
     cam.z = camT.z; cam.x = camT.x; cam.y = camT.y;
   }
   clampOne(cam);
+}
+
+//──────────────────────────── Overview minimap ────────────────────────────
+// A thin always-on strip along the bottom edge showing the WHOLE road at a
+// glance. When zoomed in it gains a viewport rectangle (the slice currently on
+// screen) and a congestion heat-strip (red where traffic is jammed) so the user
+// can SEE where a queue is building and click/drag to jump straight to it. The
+// whole road's x-axis maps linearly to the strip; world-x 0..W ↔ strip 0..mmW,
+// the SAME w = s/z + cam transform the main view uses, so the viewport rect and
+// click-to-jump line up exactly with what's on screen.
+//
+// Drawn in SCREEN space (after the world pass), so the camera transform never
+// touches it — it stays a crisp, fixed-size HUD element at any zoom.
+const MM_H = 30;                 // strip height in CSS px
+// Geometry of the strip for the current canvas size. Centred horizontally and
+// docked just ABOVE the bottom controls bar (whose height varies with the
+// device and how many control rows wrap), so it never hides behind the bar or
+// covers the road band. Capped so it never spans the whole width on big
+// monitors. The bar is position:fixed; bottom:0, so its top edge in viewport
+// coords is H − offsetHeight; we float 12 px clear of it.
+function minimapRect() {
+  const mmW = Math.min(W - 120, 560);
+  const bar = $('bottombar');
+  const barTop = bar ? H - bar.offsetHeight : H - 56;
+  const y = Math.round(barTop - MM_H - 12);
+  return { x: Math.round((W - mmW) / 2), y, w: mmW, h: MM_H };
+}
+// The minimap only earns its screen real estate once the user has zoomed in
+// (at 1× the main view already IS the overview) and only when the bottom bar
+// has left vertical room for it below the road band (e.g. it's hidden when a
+// mobile controls drawer is expanded over the lower screen).
+function minimapVisible() {
+  if (cam.z <= 1.04) return false;
+  const m = minimapRect();
+  return m.y > roadTop() + sim.lanes * LANE_H * 0.4;
+}
+
+// Per-cell congestion sampled cheaply from live cars: 0 = empty/free-flow,
+// 1 = jammed. Rebuilt each frame from one O(cars) scan (N buckets, tiny).
+const heat = new Float32Array(N);
+function sampleHeat() {
+  heat.fill(0);
+  const counts = new Uint16Array(N);
+  const vmax = Math.max(0.5, vmaxFloat());
+  for (const car of sim.cars) {
+    const i = Math.min(N - 1, Math.max(0, Math.floor(car.cell)));
+    counts[i]++;
+    // slowness in [0,1]: 0 at/above free speed, 1 at a standstill
+    heat[i] += Math.max(0, Math.min(1, 1 - car.v / vmax));
+  }
+  // average slowness per occupied cell, weighted up a little by how many cars
+  // share the cell (a packed cell reads as more congested than a lone slow car)
+  for (let i = 0; i < N; i++) {
+    if (counts[i]) {
+      const occ = Math.min(1, counts[i] / Math.max(1, sim.lanes));
+      heat[i] = (heat[i] / counts[i]) * (0.45 + 0.55 * occ);
+    }
+  }
+}
+
+function drawMinimap() {
+  if (!minimapVisible()) return;
+  const m = minimapRect();
+  sampleHeat();
+  ctx.save();
+  // translucent glass plate matching the UI aesthetic
+  ctx.fillStyle = 'rgba(16,19,27,.62)';
+  rr(ctx, m.x - 6, m.y - 6, m.w + 12, m.h + 12, 9);
+  ctx.strokeStyle = 'rgba(150,164,198,.22)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(m.x - 5.5, m.y - 5.5, m.w + 11, m.h + 11);
+  // road bed
+  ctx.fillStyle = 'rgba(56,57,62,.9)';
+  rr(ctx, m.x, m.y, m.w, m.h, 4);
+
+  // congestion heat-strip: a green→amber→red bar per cell, height-scaled by jam
+  const cwm = m.w / N;
+  for (let i = 0; i < N; i++) {
+    const v = heat[i];
+    if (v < 0.02) continue;
+    // hue 130° (green) → 0° (red) as congestion rises
+    const hue = 130 * (1 - Math.min(1, v));
+    const bh = Math.max(2, m.h * (0.35 + 0.65 * v));
+    ctx.fillStyle = `hsl(${hue.toFixed(0)},80%,52%)`;
+    ctx.globalAlpha = 0.5 + 0.5 * v;
+    ctx.fillRect(m.x + i * cwm, m.y + m.h - bh, Math.max(1, cwm + 0.5), bh);
+  }
+  ctx.globalAlpha = 1;
+
+  // landmark ticks: on-ramp entry and off-ramp gore, so the user can orient
+  ctx.fillStyle = 'rgba(255,255,255,.30)';
+  if (cfg().hasRamp) {
+    ctx.fillRect(m.x + rampStart() * cwm, m.y, 1.5, m.h);
+    if (offRampActive()) ctx.fillRect(m.x + decelEnd() * cwm, m.y, 1.5, m.h);
+  } else for (const lc of cfg().lightCells) {
+    ctx.fillRect(m.x + lc * cwm, m.y, 1.5, m.h);
+  }
+
+  // viewport rectangle: the world-x slice [cam.x, cam.x + W/cam.z] on screen now
+  const vx = m.x + (cam.x / W) * m.w;
+  const vw = Math.max(6, (m.w / cam.z));
+  ctx.fillStyle = 'rgba(88,166,255,.16)';
+  ctx.fillRect(vx, m.y, vw, m.h);
+  ctx.strokeStyle = 'rgba(120,182,255,.95)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(vx + 0.75, m.y + 0.75, Math.max(4, vw - 1.5), m.h - 1.5);
+  ctx.restore();
+}
+
+// Map a screen-x over the minimap to a camera so that world point sits in the
+// CENTRE of the view, then clamp. Shared by click and drag on the strip.
+function minimapJumpTo(sx) {
+  const m = minimapRect();
+  const frac = Math.min(1, Math.max(0, (sx - m.x) / m.w));
+  const worldX = frac * W;                       // centre of the desired view
+  camT.x = worldX - (W / camT.z) / 2;
+  clampCam();
+  cam.x = camT.x;                                // track the pointer 1:1, no lag
+  clampOne(cam);
+}
+// Is screen point (sx, sy) within the interactive minimap (incl. its padding)?
+function inMinimap(sx, sy) {
+  if (!minimapVisible()) return false;
+  const m = minimapRect();
+  return sx >= m.x - 6 && sx <= m.x + m.w + 6 &&
+         sy >= m.y - 6 && sy <= m.y + m.h + 6;
 }
 
 const scene = document.createElement('canvas');  // offscreen static scenery
@@ -256,6 +388,7 @@ function render() {
   drawSelection();
   ctx.restore();
   drawWeatherOverlay();
+  drawMinimap();          // screen-space overview HUD (only when zoomed in)
 }
 
 //—— Highway static layer: terrain, asphalt, markings, ramps, guardrails ——
@@ -1214,6 +1347,7 @@ function updateZoomUI() {
 const pointers = new Map();   // active pointerId -> {x, y} in client coords
 let drag = null;              // single-pointer pan/select state
 let lastPinch = null;         // {dist, cx, cy} from the previous pinch sample
+let lastTap = null;           // {t, x, y} of the previous tap, for double-tap zoom
 
 // Distance between the two active pointers and their midpoint (in canvas-local
 // coordinates), the two quantities a pinch is built from.
@@ -1246,9 +1380,18 @@ canvas.addEventListener('pointerdown', e => {
   if (pointers.size >= 2) {
     drag = null;                          // a second finger cancels tap/select
     lastPinch = pinchSample();
-  } else {
-    drag = { sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, panned: false };
+    return;
   }
+  // A press on the overview strip scrubs the viewport: jump there now and keep
+  // scrubbing on drag. Flagged so it never pans the world or selects a car.
+  const lp = canvasPos(e);
+  if (inMinimap(lp.x, lp.y)) {
+    drag = { minimap: true };
+    minimapJumpTo(lp.x);
+    updateZoomUI();
+    return;
+  }
+  drag = { sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, panned: false };
 });
 canvas.addEventListener('pointermove', e => {
   if (!pointers.has(e.pointerId)) return;
@@ -1269,6 +1412,11 @@ canvas.addEventListener('pointermove', e => {
   }
 
   if (!drag) return;
+  if (drag.minimap) {                     // scrub the viewport along the strip
+    minimapJumpTo(canvasPos(e).x);
+    updateZoomUI();
+    return;
+  }
   const dx = e.clientX - drag.lx, dy = e.clientY - drag.ly;
   drag.lx = e.clientX; drag.ly = e.clientY;
   if (!drag.panned &&
@@ -1285,7 +1433,7 @@ canvas.addEventListener('pointermove', e => {
 });
 function endPointer(e) {
   if (!pointers.has(e.pointerId)) return;
-  const wasSelect = drag && !drag.panned && pointers.size === 1;
+  const wasSelect = drag && !drag.minimap && !drag.panned && pointers.size === 1;
   pointers.delete(e.pointerId);
   if (pointers.size < 2) lastPinch = null;
   if (pointers.size === 1) {
@@ -1298,18 +1446,81 @@ function endPointer(e) {
   updateZoomUI();                         // restore grab/default cursor
   if (wasSelect) {
     const p = canvasPos(e);
+    // Touch double-tap mirrors mouse double-click (the browser doesn't always
+    // synthesize dblclick for touch): a second tap within 300 ms and 26 px
+    // zooms toward the point instead of selecting.
+    if (e.pointerType !== 'mouse' && lastTap &&
+        nowMs - lastTap.t < 300 && Math.hypot(p.x - lastTap.x, p.y - lastTap.y) < 26) {
+      lastTap = null;
+      zoomToggleAt(p.x, p.y);
+      return;
+    }
+    lastTap = { t: nowMs, x: p.x, y: p.y };
     selectCar(pickCar(p.x, p.y));
   }
 }
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 
+// Hover affordance (mouse only — touch has no hover): the overview strip reads
+// as clickable, the zoomed-in road as draggable, everything else as default.
+canvas.addEventListener('mousemove', e => {
+  if (drag || pointers.size) return;      // a live gesture owns the cursor
+  const p = canvasPos(e);
+  canvas.style.cursor = inMinimap(p.x, p.y) ? 'pointer'
+                      : camT.z > 1.001 ? 'grab' : '';
+});
+
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
   const p = canvasPos(e);
-  zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0014));
+  // deltaMode 1 = lines (Firefox), 2 = pages: normalise to pixel-ish deltas so a
+  // notch feels the same across browsers. ≈20% per mouse notch (deltaY≈100)
+  // crosses the 1×–14× range in ~12 notches — fluid, not twitchy on trackpads.
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? H : 1;
+  zoomAt(p.x, p.y, Math.exp(-e.deltaY * unit * 0.0022));
   updateZoomUI();
 }, { passive: false });
+
+// Double-click / double-tap zooms toward the point, or snaps back to the full
+// road once it's already deep in — one gesture both dives in and pops out.
+function zoomToggleAt(sx, sy) {
+  if (camT.z > ZOOM_MAX * 0.6) { camT.z = 1; camT.x = camT.y = 0; clampCam(); }
+  else zoomAt(sx, sy, 2.4);
+  updateZoomUI();
+}
+canvas.addEventListener('dblclick', e => {
+  e.preventDefault();
+  const p = canvasPos(e);
+  if (inMinimap(p.x, p.y)) return;        // the strip owns its own gestures
+  zoomToggleAt(p.x, p.y);
+});
+
+// Keyboard: discoverable zoom/pan without touching the mouse. Ignored while a
+// form control is focused so typing in the sidebar never moves the camera.
+function typingInForm() {
+  const el = document.activeElement;
+  return el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
+}
+window.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || typingInForm()) return;
+  const panStep = 90 / cam.z;             // world px per arrow press (eased in)
+  switch (e.key) {
+    case '+': case '=':                   // '=' is the unshifted '+' key
+      zoomAt(W / 2, H / 2, 1.4); break;
+    case '-': case '_':
+      zoomAt(W / 2, H / 2, 1 / 1.4); break;
+    case '0': case 'f': case 'F':
+      camT.z = 1; camT.x = camT.y = 0; clampCam(); break;
+    case 'ArrowLeft':  camT.x -= panStep; clampCam(); break;
+    case 'ArrowRight': camT.x += panStep; clampCam(); break;
+    case 'ArrowUp':    camT.y -= panStep; clampCam(); break;
+    case 'ArrowDown':  camT.y += panStep; clampCam(); break;
+    default: return;                      // leave every other key alone
+  }
+  e.preventDefault();
+  updateZoomUI();
+});
 
 $('zoomIn').addEventListener('click', () => { zoomAt(W / 2, H / 2, 1.35); updateZoomUI(); });
 $('zoomOut').addEventListener('click', () => { zoomAt(W / 2, H / 2, 1 / 1.35); updateZoomUI(); });

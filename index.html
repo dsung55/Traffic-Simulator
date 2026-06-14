@@ -34,12 +34,20 @@
   <p class="insHint">Click another vehicle to switch, or empty road to dismiss.</p>
 </aside>
 
-<!-- ── ZOOM CONTROLS (scroll wheel also zooms; drag pans when zoomed) ── -->
+<!-- ── ZOOM CONTROLS ──────────────────────────────────────────────────
+     Scroll wheel / pinch zooms about the cursor; drag pans when zoomed;
+     double-click (or double-tap) zooms toward a point; +/− zoom, 0 or F
+     fits, arrow keys pan. When zoomed in, an overview strip near the bottom
+     shows the whole road with a congestion heat-map — click or drag it to
+     jump straight to a jam. -->
 <div id="zoomCtl" aria-label="Zoom controls">
-  <button class="btn zbtn" id="zoomIn" title="Zoom in (or scroll up on the road)">+</button>
-  <span id="zoomLevel">1.0×</span>
-  <button class="btn zbtn" id="zoomOut" title="Zoom out (or scroll down on the road)">−</button>
-  <button class="btn zbtn" id="zoomFit" title="Reset view to the full road">⤢</button>
+  <button class="btn zbtn" id="zoomIn"
+          title="Zoom in — also: scroll up, +/= key, or double-click the road">+</button>
+  <span id="zoomLevel" title="Current zoom. Scroll, pinch, double-click or +/− to change.">1.0×</span>
+  <button class="btn zbtn" id="zoomOut"
+          title="Zoom out — also: scroll down, − key, or double-click when zoomed in">−</button>
+  <button class="btn zbtn" id="zoomFit"
+          title="Fit the whole road (0 or F key)">⤢</button>
 </div>
 
 <!-- ── TOP BAR: brand · run state · live metrics ─────────────────── -->
