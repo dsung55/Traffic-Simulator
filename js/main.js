@@ -2,16 +2,9 @@
  * Traffic Simulator — continuous microsimulation (IDM + MOBIL).
  *
  * Units (fixed): 1 cell = 7.5 m; 1 tick = 1 simulated second.
- * Positions (car.cell) and speeds (car.v, cells/second) are now FLOATS:
- *   1 cell/s = 7.5 m/s ≈ 16.8 mph. Vehicles have physical lengths (car.len,
- *   ~1.5 cells for cars, ~3.75 for trucks) used by every gap computation.
- * Longitudinal motion is the Intelligent Driver Model (IDM); lane changes are
- * MOBIL-motivated but run a realistic phase machine (signal → wait for a safe
- * gap, with cooperative yielding → smooth ~4.5 s steer-over, abortable). Each tick
- * integrates IDM over SUBSTEPS sub-steps (dt = 1/SUBSTEPS s) for stability and
- * advances sim.time by 1 (= one simulated second). The sim advances on a fixed
- * 200 ms wall-clock interval; rendering runs at 60 fps via requestAnimationFrame
- * and lerps car positions between ticks.
+ * The sim advances on a wall-clock interval of TICK_MS / sim.timeScale
+ * (200 ms at 1×, 25 ms at 8×); rendering runs at 60 fps via
+ * requestAnimationFrame and interpolates car positions between ticks.
  */
 
 import { TICK_MS } from './config.js';
@@ -19,28 +12,42 @@ import { sim } from './state.js';
 import { tick, resetSim, setEngineHooks } from './engine.js';
 import { render, resizeCanvas, invalidateScene } from './render.js';
 import {
-  bindUI, syncControls, updateMetrics, updateInspector, selectCar, updateLabels,
+  bindUI, syncControls, updateMetrics, updateInspector, selectCar, updateLabels, onTick,
 } from './ui.js';
 import { applyDeviceClass } from './device.js';
 
-//──────────────────────────── Loops ────────────────────────────
+//──────────────────────────── Sim clock ────────────────────────────
+let tickTimer = 0;
+function step() {
+  if (sim.paused) return;
+  tick();
+  onTick();
+}
+// (Re)start the fixed-interval tick at the current sim speed. Called once at
+// start-up and again whenever the user changes sim.timeScale.
+function scheduleTicks() {
+  clearInterval(tickTimer);
+  const scale = sim.timeScale || 1;
+  tickTimer = setInterval(step, TICK_MS / scale);
+}
+
+//──────────────────────────── Start-up ────────────────────────────
 function start() {
   // Wire the engine's presentation hooks to the real UI/render callbacks. The
-  // engine itself imports neither layer (no cycle, no DOM dependency); this is
-  // the single seam where they meet.
+  // engine itself imports neither layer; this is the single seam where they meet.
   setEngineHooks({ selectCar, updateLabels, invalidateScene });
-  // Tag the body mobile/desktop before wiring the UI so the collapsible bars
+  // Tag the body mobile/desktop before building the UI so collapsible bars
   // start in the right state for the device.
   applyDeviceClass();
-  bindUI();
+  bindUI({ rescheduleTicks: scheduleTicks, invalidateScene });
   syncControls();
   resizeCanvas();
   resetSim();
-  // Fixed-interval sim tick (200 ms = 1 simulated second), independent of rendering.
-  setInterval(() => { if (!sim.paused) tick(); }, TICK_MS);
-  // Metrics refresh every 500 ms (continues while paused so UI stays live).
+  scheduleTicks();
+  // Metrics + charts refresh every 500 ms (continues while paused so the UI stays live).
   setInterval(updateMetrics, 500);
-  // Inspector refresh once per sim tick; cheap no-op when nothing is selected.
+  updateMetrics();
+  // Inspector refresh; cheap no-op when nothing is selected.
   setInterval(updateInspector, 200);
   // 60 fps render loop with interpolation.
   (function frame() { render(); requestAnimationFrame(frame); })();
