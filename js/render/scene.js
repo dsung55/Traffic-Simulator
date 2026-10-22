@@ -788,7 +788,7 @@ function paintCityGround(g) {
       if (skip(x) || skip(x + stall) || G.inters.some(it => x + stall > it.stop - c * 2.5 && x < it.cw1 + G.cwW + c * 1.5)) continue;
       g.fillStyle = 'rgba(240,241,243,.7)';
       g.fillRect(x, side ? y0 + G.parkW * 0.45 : y0, Math.max(0.8, LH * 0.05), G.parkW * 0.55);
-      if (rnd() < 0.55) {
+      if (rnd() < 0.35) {
         const kinds = ['sedan', 'sedan', 'hatch', 'suv', 'pickup', 'van'];
         const kind = kinds[Math.floor(rnd() * kinds.length)];
         const paint = rnd() < 0.5 ? { h: 0, s: 0, l: 20 + rnd() * 70 } : { h: rnd() * 360, s: 25 + rnd() * 40, l: 30 + rnd() * 35 };
