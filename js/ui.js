@@ -384,6 +384,7 @@ function updateMetrics() {
   $('btnBaseline').querySelector('span').textContent = baseline ? 'Update baseline' : 'Save baseline';
   $('baseHint').hidden = !!baseline;
   $('baseInfo').hidden = !baseline;
+  $('btnBaseClear').hidden = !baseline;
   compareState = null;
   if (baseline) {
     const changes = settingChanges();

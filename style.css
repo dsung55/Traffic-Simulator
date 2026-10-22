@@ -155,7 +155,7 @@
   .chg em{font-style:normal;color:var(--faint);margin-right:2px}
   .chg b{color:var(--text)}
   .chg.none{border-style:solid;color:var(--faint)}
-  #btnBaseClear{margin-left:auto;flex:none}
+  #btnBaseClear{flex:none;align-self:flex-start}
 
   .chartCard{border-radius:var(--r-sm);background:rgba(10,12,18,.5);border:1px solid var(--glass-border);
     padding:4px 6px 3px;min-width:0;display:flex}
@@ -532,3 +532,5 @@
   @media (prefers-reduced-motion:reduce){
     *,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}
   }
+  .is-mobile .baseInfo{flex-basis:100%;order:-1;justify-content:flex-start}
+  .is-mobile .baseChanges{justify-content:flex-start}
