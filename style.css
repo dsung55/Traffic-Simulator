@@ -280,7 +280,7 @@
 
   /* Experiment guide: bottom-right, between the road and the control dock
      (the on-ramp sits at the left end of the road, so the right side is clear) */
-  #guide{position:fixed;z-index:11;right:62px;bottom:calc(var(--bot-h) + 12px);width:min(560px,calc(100vw - 90px));
+  #guide{position:fixed;z-index:11;right:62px;bottom:calc(var(--bot-h) + 12px);width:min(640px,calc(100vw - 90px));
     padding:10px 12px 11px 14px;display:flex;flex-direction:column;gap:6px;
     max-height:calc(100vh - var(--top-h) - var(--bot-h) - 24px);overflow:auto;
     animation:cardIn .3s var(--ease)}

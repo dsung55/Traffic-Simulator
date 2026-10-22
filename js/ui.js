@@ -211,8 +211,11 @@ const METRICS = [
     what: 'Average number of times a vehicle came to (nearly) a stop.',
     why: 'Each stop costs fuel, emissions and rear-end crash risk. Stop-and-go waves and uncoordinated signals drive it up.' },
   { key: 'rampQueue', label: 'Ramp queue', unit: 'veh', d: 0, better: -1, scenario: 'highway',
-    what: 'Vehicles waiting on the on-ramp (meter queue plus acceleration lane).',
+    what: 'Vehicles waiting on the on-ramp to merge or for the meter.',
     why: 'Ramp metering deliberately trades a longer ramp queue for a faster mainline. If it grows without limit it would spill onto local streets.' },
+  { key: 'entryQueue', label: 'Entry queue', unit: 'veh', d: 0, better: -1,
+    what: 'Vehicles that have arrived upstream but cannot enter the section yet because there is no room.',
+    why: 'This is spillback: demand exceeds what the road can absorb, so the queue extends beyond what you see. Real jams grow the same way, backwards into earlier junctions.' },
 ];
 
 let baseline = null;   // { stats, settings, t }
@@ -278,11 +281,12 @@ function settingChanges() {
 function deltaFor(m, cur, base) {
   if (!Number.isFinite(cur) || !Number.isFinite(base)) return null;
   const diff = cur - base;
-  const scale = Math.max(Math.abs(base), m.key === 'stopsPerVeh' ? 0.25 : m.key === 'rampQueue' ? 3 : 1e-6);
+  const queue = m.key === 'rampQueue' || m.key === 'entryQueue';
+  const scale = Math.max(Math.abs(base), m.key === 'stopsPerVeh' ? 0.25 : queue ? 3 : 1e-6);
   const rel = diff / scale;
   if (Math.abs(rel) < 0.03) return { text: '≈ same', cls: 'same' };
   const arrow = diff > 0 ? '▲' : '▼';
-  const txt = Math.abs(base) > 1e-6 && m.key !== 'rampQueue'
+  const txt = Math.abs(base) > 1e-6 && !queue
     ? `${arrow} ${Math.round(Math.abs(diff / base) * 100)}%`
     : `${arrow} ${fmt(Math.abs(diff), Math.abs(diff) < 10 ? 1 : 0)}`;
   const cls = !m.better ? 'neutral' : (diff * m.better > 0 ? 'better' : 'worse');
@@ -305,6 +309,25 @@ function compareSentence(cur, base) {
       text: `Average speed is ${Math.round(Math.abs(d) * 100)}% ${d > 0 ? 'higher' : 'lower'} than the baseline (${v0.toFixed(0)} → ${v1.toFixed(0)} mph).` };
   }
   return { level: 'same', text: 'Collecting data to compare…' };
+}
+
+// Experiment-specific comparison: the metrics that experiment is about.
+const METRIC_BY_KEY = Object.fromEntries(METRICS.map(m => [m.key, m]));
+function compareFocus(keys, cur, base) {
+  const parts = [];
+  let level = null;
+  for (const k of keys) {
+    const m = METRIC_BY_KEY[k];
+    if (!m) continue;
+    const a = base[k], b = cur[k];
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    const dd = deltaFor(m, b, a);
+    const unit = m.unit ? ' ' + m.unit : '';
+    parts.push(`${m.label}: ${fmt(a, m.d)} → ${fmt(b, m.d)}${unit}` + (dd && dd.cls !== 'same' ? ` (${dd.text.replace(/[▲▼] /, b > a ? '+' : '−')})` : ''));
+    if (level === null && dd) level = dd.cls === 'better' ? 'better' : dd.cls === 'worse' ? 'worse' : 'same';
+  }
+  if (!parts.length) return compareSentence(cur, base);
+  return { level: level || 'same', text: parts.join(' · ') };
 }
 
 let tsHover = null, fdHover = null;
@@ -335,7 +358,7 @@ function updateMetrics() {
 
   for (const m of METRICS) {
     const el = $('k-' + m.key);
-    const show = !m.scenario || (m.scenario === 'highway') === hwy;
+    const show = (!m.scenario || (m.scenario === 'highway') === hwy) && s[m.key] !== undefined;
     el.hidden = !show;
     if (!show) continue;
     el.querySelector('b').textContent = fmt(s[m.key], m.d);
@@ -495,7 +518,10 @@ function updateGuide() {
   const res = $('gResult');
   if (anyBaselineDone) {
     if (!warm) { res.textContent = 'Give traffic a minute or two to respond, then read the deltas: green = better, red = worse.'; res.className = 'gResult'; }
-    else if (compareState) { res.textContent = compareState.text; res.className = 'gResult ' + compareState.level; }
+    else if (baseline) {
+      const r = compareFocus(exp.focus || ['meanTravelTimeS'], windowMean(30) || readStats(), baseline.stats);
+      res.textContent = r.text; res.className = 'gResult ' + r.level;
+    }
   } else {
     res.textContent = warm && exp.steps.some(s => s.baseline) ? 'Traffic has settled. Run the next step to compare.' : '';
     res.className = 'gResult';

@@ -49,6 +49,7 @@ function fallbackStats() {
     laneChangesPerMin: (sim.evLaneChanges || []).filter(t => t > sim.time - 60).length,
     rampQueue,
     throughputPerMin: thru * (60 / win),
+    ...(sim.entryQueue !== undefined ? { entryQueue: sim.entryQueue } : {}),
   };
 }
 
@@ -132,6 +133,15 @@ export function verdict(stats) {
   if (sim.incident && cfg().hasIncident) tags.push('incident bottleneck');
   if (Number.isFinite(stats.rampQueue) && stats.rampQueue >= 12) tags.push('ramp queue building');
   const tail = tags.length ? ` (${tags.join(', ')})` : '';
+
+  // Spillback: more vehicles arrive than the section can absorb.
+  const eq = stats.entryQueue;
+  if (Number.isFinite(eq) && eq >= 15) {
+    const old = history.find(h => h.t >= sim.time - 60);
+    const growing = old && Number.isFinite(old.entryQueue) && eq > old.entryQueue + 3;
+    return { level: 'bad', text: `Demand exceeds capacity: ${Math.round(eq)} vehicles are queued upstream` +
+      (growing ? ' and the queue keeps growing.' : '.') + (tags.length ? ` Also: ${tags.join(', ')}.` : '') };
+  }
 
   if (cfg().lightCells) {
     const st = stats.stopsPerVeh;
