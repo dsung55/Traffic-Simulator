@@ -968,7 +968,10 @@ function distractionStep() {
       car.distracted = true;
       const dur = DISTRACT_DUR[0] + rng() * (DISTRACT_DUR[1] - DISTRACT_DUR[0]);
       car.distractUntil = sim.time - 1 + dur;      // this tick's sub-steps start at time-1
-      car.lapseA = Math.max(-0.03, Math.min(0.02, car.accA || 0));   // ≈ ±0.2 m/s²: coasting
+      // Phone users drift: they ease off the throttle (≈−0.3 m/s²; Oviedo-
+      // Trespalacios et al. 2016 review: mobile-phone use lowers speed and
+      // makes headways erratic) and do not track the car ahead.
+      car.lapseA = Math.max(-0.05, Math.min(0, car.accA || 0) - 0.04);
       if (car.lc) cancelLC(car, 2);
     }
   }
