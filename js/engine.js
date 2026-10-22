@@ -306,10 +306,16 @@ function drv(car) {
       T *= 1 + f * (RUBBERNECK.Tmul - 1);
     }
   }
+  // Available acceleration falls with speed: drivers pull away from a stop at
+  // ≈2–2.5 m/s² but accelerate at highway speed at ≈1–1.5 m/s² (Long 2000,
+  // TRR 1737; Bham & Benekohal 2002). Without this, signal queues discharge
+  // at ~3.4 s headways instead of the ≈2 s saturation headway (HCM: ~1,900
+  // veh/h of green per lane).
+  const launch = 1 + LAUNCH_BOOST * Math.max(0, 1 - car.v / Math.max(0.5, v0));
   return {
     v0, T,
     s0: p.s0 + w.s0add,
-    a: p.a * w.aMul,
+    a: p.a * w.aMul * launch,
     b: p.b * w.bMul,
     brake: 2 * B_SAFE * w.brakeMul,   // emergency braking ceiling (friction-limited)
   };
@@ -333,6 +339,7 @@ function effV0(car) { return drv(car).v0; }
 // of Kesting et al. (2010): it uses the leader's acceleration and does not
 // over-react to cut-ins or to a leader that is already braking enough.
 const IDM_DELTA = 4;
+const LAUNCH_BOOST = 0.6;  // max accel at standstill = (1 + 0.6) × profile a
 const ANTICIPATION = 0.6;   // α: fraction of the τ-ahead gap change a human anticipates
 
 function cahAccel(s, v, vl, al, a) {

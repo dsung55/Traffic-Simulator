@@ -235,8 +235,9 @@ const SCENARIOS = {
     speedRange: [25, 45], speedStep: 5, defaultSpeed: 35,
     hasRamp: false,
     hasIncident: false, lightCells: [21, 46, 71], style: 'city',
-    // ≈ v/c 0.75 for a 50 % green split at ~1,800 veh/h-green saturation flow.
-    defaultDemandVph: 700,
+    // ≈ v/c 0.75: with a 50 % split the signals pass ≈600 veh/h/ln (the long
+    // render-scale bodies stretch saturation headways to ≈2.7 s per lane).
+    defaultDemandVph: 450,
   },
 };
 

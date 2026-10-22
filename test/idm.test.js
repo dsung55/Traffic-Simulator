@@ -15,7 +15,7 @@ test('free road, well below desired speed: accelerates', () => {
   // Near full throttle for the profile — but full throttle is now a realistic
   // ~1.4 m/s² (0.19 cells/s²), not the old 12 m/s².
   assert.ok(acc > 0.1, `expected near-max acceleration, got ${acc}`);
-  assert.ok(acc <= car.prof.a + 1e-12, 'never exceeds the profile max');
+  assert.ok(acc <= car.prof.a * 1.6 + 1e-12, "never exceeds the profile max (with the from-stop launch boost)");
 });
 
 test('at desired speed v0 on a free road: acceleration ~ 0', () => {
