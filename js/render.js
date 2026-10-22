@@ -30,7 +30,7 @@ import {
 } from './render/scene.js';
 import {
   vehSpec, bodyWidth, drawVehicle, drawLamps, drawPhoneBadge, resetSpriteBudget, clearSprites,
-  glow, GLOW_RED,
+  glow, GLOW_RED, GLOW_WHITE,
 } from './render/vehicles.js';
 import {
   drawHeatmap, drawRampQueue, rampMeterS, drawIncidentGround, drawIncidentResponders,
@@ -407,6 +407,25 @@ function drawCars() {
   return visible;
 }
 
+// In fog, lamps punch through the veil: soft additive halos drawn in screen
+// space after the fog overlay (headlights white, tail/brake lights red).
+function drawFogLights(visible) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const d of visible) {
+    const c = Math.cos(d.rot || 0), s = Math.sin(d.rot || 0);
+    const sx = (d.cx - cam.x) * cam.z, sy = (d.cy - cam.y) * cam.z;
+    const fx = c * d.len / 2 * cam.z, fy = s * d.len / 2 * cam.z;
+    const r = Math.max(3, d.h * 0.7 * cam.z);
+    ctx.globalAlpha = 0.35 * d.alpha;
+    glow(ctx, GLOW_WHITE, sx + fx, sy + fy, r * 1.3);
+    const bk = d.ghost ? 0 : (d.car._bk || 0);
+    ctx.globalAlpha = (0.2 + 0.45 * bk) * d.alpha;
+    glow(ctx, GLOW_RED, sx - fx, sy - fy, r);
+  }
+  ctx.restore();
+}
+
 // Distracted-driver badges (after the overhead layer so they're never hidden).
 function drawBadges(visible) {
   const show = LANE_H * cam.z >= 18 || drawList.length < 0;
@@ -467,6 +486,7 @@ function render() {
   drawSelection();
   ctx.restore();
   drawWeather(ctx);
+  if (sim.weather === 'fog') drawFogLights(visible);
   drawMinimap();
 }
 

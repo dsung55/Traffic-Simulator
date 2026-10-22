@@ -597,7 +597,7 @@ function paintHighwayTop(g) {
   }
   // overhead guide sign for the exit (static gantry upstream of the diverge)
   if (G.hasOff) {
-    const gx = G.dsX - c * 6;
+    const gx = G.dsX - c * 3;
     signGantry(g, G, gx, (gc, sx, sy, sw, sh) => {
       gc.fillStyle = '#0f6b3a'; rr(gc, sx, sy, sw, sh, sh * 0.12);
       gc.strokeStyle = '#e8f3ec'; gc.lineWidth = Math.max(0.5, sh * 0.06);
@@ -1021,7 +1021,7 @@ export function prepareScene() {
 export function drawLayer(ctx, name) {
   const L = layers[name];
   const W = view.W, H = view.H;
-  if (cam.z < 1.15) { ctx.drawImage(L.base, 0, 0, W, H); return; }
+  if (cam.z < 1.15) { blitBase(ctx, L, name); return; }
   const vr = viewRect();
   const zi = L.zi;
   const effDpr = Math.min(view.dpr, 2);
@@ -1035,8 +1035,23 @@ export function drawLayer(ctx, name) {
   }
   const z = L.zi;
   const zCovers = z && vr.x0 >= z.x0 - 0.5 && vr.y0 >= z.y0 - 0.5 && vr.x1 <= z.x1 + 0.5 && vr.y1 <= z.y1 + 0.5;
-  if (!zCovers) ctx.drawImage(L.base, 0, 0, W, H);
+  if (!zCovers) blitBase(ctx, L, name);
   if (z && z.scale >= want * 0.6) ctx.drawImage(L.zoom, z.x0, z.y0, z.x1 - z.x0, z.y1 - z.y0);
+}
+
+// The TOP layer only has content in a horizontal band around the road, so
+// blit just that slice (saves a full-screen transparent composite per frame).
+function blitBase(ctx, L, name) {
+  const W = view.W, H = view.H;
+  if (name !== 'top') { ctx.drawImage(L.base, 0, 0, W, H); return; }
+  const G = geo();
+  let y0, y1;
+  if (G.style === 'city') { y0 = G.walkTop - G.LH * 1.6; y1 = G.walkBot + G.LH * 1.6; }
+  else { y0 = G.deckY0 - G.LH * 0.5; y1 = G.deckY1 + G.LH * 1.5; }
+  y0 = Math.max(0, Math.floor(y0)); y1 = Math.min(H, Math.ceil(y1));
+  if (y1 <= y0) return;
+  const d = view.dpr;
+  ctx.drawImage(L.base, 0, Math.round(y0 * d), L.base.width, Math.round((y1 - y0) * d), 0, y0, W, y1 - y0);
 }
 
 function buildZoom(L, vr, scale) {

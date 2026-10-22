@@ -77,27 +77,35 @@ function rain(ctx, W, H, t) {
   ctx.globalAlpha = 1;
 }
 
+// Fog is composed at quarter resolution (it is all soft gradients anyway)
+// and upscaled in a single full-screen pass — far cheaper than stacking
+// several full-screen translucent layers.
+let fogCv = null;
 function fog(ctx, W, H, t) {
-  ctx.fillStyle = 'rgba(214,220,228,.30)';            // uniform veil (contrast loss)
-  ctx.fillRect(0, 0, W, H);
-  // thicker toward the screen edges, thinner mid-screen where the road is
-  const gr = ctx.createLinearGradient(0, 0, 0, H);
-  gr.addColorStop(0, 'rgba(214,220,228,.45)');
-  gr.addColorStop(0.42, 'rgba(214,220,228,.05)');
-  gr.addColorStop(0.58, 'rgba(214,220,228,.05)');
-  gr.addColorStop(1, 'rgba(214,220,228,.45)');
-  ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+  const q = 4, fw = Math.max(1, Math.ceil(W / q)), fh = Math.max(1, Math.ceil(H / q));
+  if (!fogCv) fogCv = document.createElement('canvas');
+  if (fogCv.width !== fw || fogCv.height !== fh) { fogCv.width = fw; fogCv.height = fh; }
+  const g = fogCv.getContext('2d');
+  g.clearRect(0, 0, fw, fh);
+  // veil: thick toward the screen edges, thinner mid-screen where the road is
+  const gr = g.createLinearGradient(0, 0, 0, fh);
+  gr.addColorStop(0, 'rgba(214,220,228,.62)');
+  gr.addColorStop(0.42, 'rgba(214,220,228,.32)');
+  gr.addColorStop(0.58, 'rgba(214,220,228,.32)');
+  gr.addColorStop(1, 'rgba(214,220,228,.62)');
+  g.fillStyle = gr; g.fillRect(0, 0, fw, fh);
   // two drifting banks of the tiling fog texture, parallax-offset
   const tex = fogTexture();
   const k = t / 1000;
   for (const [sp, sc, a, oy] of [[9, 2.2, 0.55, 0], [16, 3.4, 0.4, 0.35]]) {
-    const tw = tex.width * sc, th = tex.height * sc;
-    const ox = -((k * sp) % tw);
-    ctx.globalAlpha = a;
-    for (let y = -th * oy; y < H; y += th)
-      for (let x = ox; x < W; x += tw) ctx.drawImage(tex, x, y, tw, th);
+    const tw = tex.width * sc / q, th = tex.height * sc / q;
+    const ox = -((k * sp / q) % tw);
+    g.globalAlpha = a;
+    for (let y = -th * oy; y < fh; y += th)
+      for (let x = ox; x < fw; x += tw) g.drawImage(tex, x, y, tw, th);
   }
-  ctx.globalAlpha = 1;
+  g.globalAlpha = 1;
+  ctx.drawImage(fogCv, 0, 0, fw * q, fh * q);
 }
 
 function snow(ctx, W, H, t) {
@@ -117,8 +125,8 @@ function snow(ctx, W, H, t) {
       const sx = hashf(i, li * 5 + 21), sy = hashf(i, li * 5 + 22), ph = hashf(i, li * 5 + 23) * 6.28;
       const y = ((sy * H + k * L.sp * (0.8 + sx * 0.4)) % (H + 20)) - 10;
       const x = ((sx * W + k * 12 + Math.sin(k * 0.9 + ph) * L.sway) % (W + 20) + W + 20) % (W + 20) - 10;
-      ctx.moveTo(x + L.r, y);
-      ctx.arc(x, y, L.r, 0, 6.283);
+      if (li < 2) ctx.rect(x - L.r, y - L.r, L.r * 2, L.r * 2);   // tiny flakes: squares are plenty
+      else { ctx.moveTo(x + L.r, y); ctx.arc(x, y, L.r, 0, 6.283); }
     }
     ctx.fill();
   }
