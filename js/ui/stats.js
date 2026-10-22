@@ -3,7 +3,7 @@
 // doesn't provide it), keeps a time series sampled in SIMULATED time, and
 // derives Level of Service and a plain-language verdict.
 import * as engine from '../engine.js';
-import { MPH_PER_CELL, ROAD_MILES } from '../config.js';
+import { MPH_PER_CELL, ROAD_MILES, N } from '../config.js';
 import { sim, cfg, carV0 } from '../state.js';
 
 const SAMPLE_EVERY = 2;      // sim seconds between history samples
@@ -28,14 +28,22 @@ function fallbackStats() {
   const trips = (sim.evTravel || []).filter(e => e.t > sim.time - 120);
   const stops = (sim.evStops || []).filter(t => t > sim.time - 120).length;
   const passed120 = (sim.evThroughput || []).filter(t => t > sim.time - 120).length;
+  // Without completed-trip records, estimate travel time / delay from space-
+  // mean speeds over the section (length / mean speed vs. length / mean desired speed).
+  let tt = trips.length ? mean(trips.map(e => e.travel)) : NaN;
+  let dl = trips.length ? mean(trips.map(e => e.delay)) : NaN;
+  if (!trips.length && cars.length && sim.time > 20) {
+    const v = mean(cars.map(c => c.v)), v0 = mean(cars.map(c => carV0(c)));
+    if (v > 0.05) { tt = N / v; dl = Math.max(0, N / v - N / v0); }
+  }
   let rampQueue = NaN;
   if (cfg().hasRamp) rampQueue = (sim.rampQueue || 0) + sim.cars.filter(c => c.lane === sim.lanes).length;
   return {
     avgSpeedMph: cars.length ? mean(cars.map(c => c.v)) * MPH_PER_CELL : NaN,
     flowVphPerLane: sim.time > 5 ? thru * (3600 / win) / lanes : NaN,
     densityVpmPerLane: cars.length / ROAD_MILES / lanes,
-    meanTravelTimeS: trips.length ? mean(trips.map(e => e.travel)) : NaN,
-    meanDelayS: trips.length ? mean(trips.map(e => e.delay)) : NaN,
+    meanTravelTimeS: tt,
+    meanDelayS: dl,
     stopsPerVeh: passed120 ? stops / Math.max(passed120, cars.length) : NaN,
     vehOnRoad: sim.cars.length,
     laneChangesPerMin: (sim.evLaneChanges || []).filter(t => t > sim.time - 60).length,

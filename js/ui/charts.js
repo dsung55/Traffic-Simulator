@@ -139,7 +139,8 @@ export function drawFD(cv, rows, baseline, hover) {
   const padL = 34, padR = 8, top = 16, bottom = 16;
   const pts = rows.filter(r => Number.isFinite(r.densityVpmPerLane) && Number.isFinite(r.flowVphPerLane));
   const kMax = niceMax(Math.max(40, ...pts.map(r => r.densityVpmPerLane)) * 1.1, [40, 60, 80, 100, 120, 160]);
-  const qMax = niceMax(Math.max(1600, ...pts.map(r => r.flowVphPerLane)) * 1.08, [1600, 2000, 2400, 3000]);
+  const qFloor = cfg().lightCells ? 1600 : 2400;   // freeway: keep headroom above the capacity line
+  const qMax = niceMax(Math.max(qFloor, ...pts.map(r => r.flowVphPerLane * 1.08)), [1600, 2000, 2400, 3000]);
   const pw = w - padL - padR, ph = h - top - bottom;
   const X = k => padL + k / kMax * pw, Y = q => top + ph - q / qMax * ph;
 

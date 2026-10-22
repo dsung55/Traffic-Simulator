@@ -142,17 +142,20 @@
 
   .baseRow{display:flex;align-items:center;gap:10px;min-height:28px;flex-wrap:wrap}
   .baseHint{margin:0;font-size:11.5px;color:var(--faint)}
-  .baseInfo{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;flex:1}
-  .baseSummary{font-size:12px;font-weight:650;padding:3px 9px;border-radius:7px;background:var(--glass-3)}
+  .baseInfo{display:flex;align-items:center;gap:6px 8px;flex-wrap:wrap;min-width:0;flex:1}
+  .baseSummary{flex:0 1 auto;min-width:0;font-size:12px;font-weight:650;padding:3px 9px;border-radius:7px;background:var(--glass-3);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .baseSummary.better{color:#8de8ab;background:var(--good-soft)}
   .baseSummary.worse{color:#ffaaa2;background:var(--bad-soft)}
   .baseSummary.same{color:var(--dim)}
-  .baseChanges{display:flex;gap:6px;flex-wrap:wrap;min-width:0}
+  .baseChanges{display:flex;gap:6px;flex-wrap:wrap;min-width:0;flex-basis:100%}
+  .baseChanges::before{content:"Changed since baseline:";font-size:11px;color:var(--faint);align-self:center}
+  .is-mobile .baseSummary{white-space:normal}
   .chg{font-size:11px;color:var(--dim);padding:2px 8px;border-radius:999px;border:1px dashed var(--border-2)}
   .chg em{font-style:normal;color:var(--faint);margin-right:2px}
   .chg b{color:var(--text)}
   .chg.none{border-style:solid;color:var(--faint)}
-  #btnBaseClear{margin-left:auto}
+  #btnBaseClear{margin-left:auto;flex:none}
 
   .chartCard{border-radius:var(--r-sm);background:rgba(10,12,18,.5);border:1px solid var(--glass-border);
     padding:4px 6px 3px;min-width:0;display:flex}
@@ -180,7 +183,7 @@
   #controls{padding-top:12px;overflow-y:auto;min-height:0}
   .panel{animation:panelIn .22s var(--ease)}
   @keyframes panelIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-  .ctlGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px 26px;align-items:start}
+  .ctlGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:12px 26px;align-items:start}
   .naNote{margin:10px 0 0;font-size:11px;color:var(--faint)}
 
   .ctl{display:flex;flex-direction:column;gap:6px;min-width:0;transition:opacity .2s}
@@ -275,12 +278,13 @@
     color:var(--faint);font:inherit;font-size:17px;cursor:pointer;line-height:1;display:grid;place-items:center}
   .insX:hover{background:var(--panel-3);color:var(--text)}
 
-  /* Experiment guide: just below the top bar, left side (clear of the road) */
-  #guide{position:fixed;z-index:11;left:14px;top:calc(var(--top-h) + 10px);width:min(560px,calc(100vw - 90px));
+  /* Experiment guide: bottom-right, between the road and the control dock
+     (the on-ramp sits at the left end of the road, so the right side is clear) */
+  #guide{position:fixed;z-index:11;right:62px;bottom:calc(var(--bot-h) + 12px);width:min(560px,calc(100vw - 90px));
     padding:10px 12px 11px 14px;display:flex;flex-direction:column;gap:6px;
-    max-height:calc(100vh - var(--top-h) - var(--bot-h) - 20px);overflow:auto;
+    max-height:calc(100vh - var(--top-h) - var(--bot-h) - 24px);overflow:auto;
     animation:cardIn .3s var(--ease)}
-  @keyframes cardIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+  @keyframes cardIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   .gHead{display:flex;align-items:center;gap:4px}
   .gTitleWrap{display:flex;align-items:baseline;gap:9px;min-width:0;flex:1;flex-wrap:wrap}
   .gKicker{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--accent-2)}
@@ -296,7 +300,8 @@
   .gProgress{display:flex;align-items:center;gap:10px;font-size:11.5px;color:var(--dim)}
   .gBar{flex:none;width:120px;height:5px;border-radius:999px;background:var(--track);overflow:hidden}
   .gBar i{display:block;height:100%;width:0;background:var(--accent-grad);transition:width .5s linear}
-  .gSteps{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+  .gSteps{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .gWhyBtn{display:none}
   .gStep{white-space:normal;text-align:left}
   .gStep:not(:disabled){border-color:rgba(88,166,255,.6);background:rgba(88,166,255,.14)}
   .gStep:not(:disabled):hover{background:rgba(88,166,255,.24)}
@@ -311,16 +316,16 @@
   .gResult.better{color:#8de8ab}
   .gResult.worse{color:#ffaaa2}
 
-  /* Vehicle inspector: bottom-right, between the road and the control dock */
-  #inspector{position:fixed;z-index:11;right:62px;bottom:calc(var(--bot-h) + 12px);width:340px;
-    display:none;flex-direction:column;gap:8px;padding:10px 12px 12px}
+  /* Vehicle inspector: top-right, between the metrics bar and the road */
+  #inspector{position:fixed;z-index:12;right:62px;top:calc(var(--top-h) + 12px);width:470px;
+    display:none;flex-direction:column;gap:7px;padding:8px 12px 10px}
   #inspector.show{display:flex;animation:cardIn .25s var(--ease)}
   .insHead{display:flex;align-items:center;gap:9px}
   #insSwatch{flex:none;width:14px;height:14px;border-radius:4px;border:1px solid rgba(255,255,255,.25)}
-  .insTitle{display:flex;flex-direction:column;line-height:1.15;min-width:0;flex:1}
+  .insTitle{display:flex;flex-direction:column;line-height:1.15;min-width:0;flex:none}
   .insTitle b{font-size:13.5px}
   #insProf{font-size:11px;color:var(--faint);text-transform:capitalize}
-  .insChips{display:flex;gap:5px;flex-wrap:wrap}
+  .insChips{display:flex;gap:4px;flex-wrap:wrap;flex:1;min-width:0}
   .insChips:empty{display:none}
   .ichip{font-size:10.5px;font-weight:650;padding:1px 8px;border-radius:999px;background:var(--glass-3);
     border:1px solid var(--glass-border);color:var(--dim);text-transform:capitalize}
@@ -328,12 +333,13 @@
   .ichip.warn{color:#f5d77e;border-color:rgba(240,194,75,.5);background:var(--warn-soft)}
   .ichip.p-aggressive{color:#ffb0a8}
   .ichip.p-passive{color:#a8cbf2}
-  #insRows{display:grid;grid-template-columns:1fr 1fr;gap:3px 16px;padding-top:8px;border-top:1px solid var(--glass-border)}
+  #insRows{display:grid;grid-template-columns:repeat(3,1fr);gap:3px 16px;padding-top:7px;border-top:1px solid var(--glass-border)}
   .insRow{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--dim)}
   .insRow.wide{grid-column:1/-1}
   .insRow b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
-  .insRow b.warnTxt{color:var(--warn)}
-  .insRow b.badTxt{color:#ff9c92}
+  .insStatus{font-size:11px;color:var(--dim);white-space:nowrap}
+  .insStatus.warnTxt{color:var(--warn)}
+  .insStatus.badTxt{color:#ff9c92}
 
   /* Zoom cluster (bound by the renderer): right edge, vertically centred */
   #zoomCtl{position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:9;
@@ -366,7 +372,7 @@
   .popKbd{color:var(--faint);font-size:11.5px}
 
   /* Toast */
-  .toast{position:fixed;z-index:40;left:50%;bottom:calc(var(--bot-h) + 16px);transform:translate(-50%,10px);
+  .toast{position:fixed;z-index:40;left:50%;top:calc(var(--top-h) + 14px);transform:translate(-50%,-8px);
     max-width:min(560px,calc(100vw - 24px));padding:9px 16px;border-radius:999px;
     background:rgba(18,21,30,.94);border:1px solid var(--glass-border);box-shadow:0 12px 30px -10px rgba(0,0,0,.8);
     font-size:12.5px;font-weight:600;color:var(--text);text-align:center;
@@ -487,10 +493,21 @@
 
   .is-mobile #zoomCtl{right:8px}
   .is-mobile .zbtn{width:36px;height:36px}
-  .is-mobile #guide{left:8px;right:8px;width:auto;top:calc(var(--top-h) + 8px);padding:9px 10px 10px 12px}
-  .is-mobile .gText{font-size:12px}
-  .is-mobile #inspector{left:8px;right:8px;width:auto;bottom:calc(var(--bot-h) + 8px)}
-  .is-mobile .toast{border-radius:14px;bottom:calc(var(--bot-h) + 12px)}
+  .is-mobile #guide{left:8px;right:8px;width:auto;bottom:calc(var(--bot-h) + 8px);padding:9px 10px 10px 12px}
+  .is-mobile .gText{font-size:11.5px;line-height:1.4}
+  .is-mobile .gStep{font-size:11.5px;padding:4px 9px;min-height:30px}
+  .is-mobile .gResult{font-size:11.5px}
+  .is-mobile #guide.collapsed .gWhyBtn{display:none}
+  .is-mobile .gWhyBtn{min-height:26px;padding:2px 9px;font-size:11.5px}
+  .is-mobile #guide:not(.showWhy) .gText.whyText{display:none}
+  .is-mobile .gWhyBtn{display:inline-flex}
+  .is-mobile.controls-open #guide .gBody{display:none}
+  .is-mobile.controls-open #guide #gCollapse{display:none}
+  .is-mobile #inspector{left:8px;right:8px;width:auto;top:calc(var(--top-h) + 8px)}
+  .is-mobile #insRows{grid-template-columns:1fr 1fr}
+  .is-mobile .toast{border-radius:14px;top:auto;bottom:calc(var(--bot-h) + 10px);transform:translate(-50%,8px)}
+  .is-mobile .toast.show{transform:translate(-50%,0)}
+  .is-mobile:has(#guide:not([hidden])) .toast{bottom:auto;top:calc(var(--top-h) + 10px)}
   .is-mobile .expGrid{grid-template-columns:1fr}
   .is-mobile .dlg{padding:16px 14px}
 

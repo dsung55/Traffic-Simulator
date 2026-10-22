@@ -99,8 +99,8 @@
         <p class="baseHint" id="baseHint">Save a baseline, change one thing, then compare.</p>
         <div id="baseInfo" class="baseInfo" hidden>
           <span id="baseSummary" class="baseSummary" aria-live="polite"></span>
-          <span id="baseChanges" class="baseChanges"></span>
           <button id="btnBaseClear" class="btn sm ghost" type="button" title="Forget the baseline">Clear</button>
+          <span id="baseChanges" class="baseChanges" aria-label="Settings changed since the baseline"></span>
         </div>
       </div>
     </div>
@@ -120,6 +120,7 @@
       <span class="gKicker" id="gKicker">Experiment</span>
       <b id="gTitle"></b>
     </div>
+    <button id="gWhyBtn" class="btn sm ghost gWhyBtn" type="button" aria-expanded="false" aria-controls="gWhyP">Why?</button>
     <button id="gCollapse" class="insX" type="button" aria-expanded="true" aria-label="Collapse guide" title="Collapse">
       <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10l4-4 4 4"/></svg>
     </button>
@@ -127,7 +128,7 @@
   </div>
   <div class="gBody" id="gBody">
     <p class="gText"><span class="gTag">Watch</span><span id="gWatch"></span></p>
-    <p class="gText"><span class="gTag why">Why</span><span id="gWhy"></span></p>
+    <p class="gText whyText" id="gWhyP"><span class="gTag why">Why</span><span id="gWhy"></span></p>
     <div class="gProgress" id="gProgress"><div class="gBar"><i id="gBarFill"></i></div><span id="gProgText"></span></div>
     <ol class="gSteps" id="gSteps"></ol>
     <p class="gResult" id="gResult" aria-live="polite"></p>
@@ -140,12 +141,13 @@
     <span id="insSwatch" aria-hidden="true"></span>
     <div class="insTitle">
       <b id="insName">Car</b>
-      <span id="insProf">normal driver</span>
+      <span id="insStatus" class="insStatus">–</span>
+      <span id="insProf" class="sr">normal driver</span>
     </div>
+    <div id="insChips" class="insChips"></div>
     <button id="insBrake" class="btn sm ghost" type="button" title="Make this driver brake hard (B)">Brake</button>
     <button id="insClose" class="insX" type="button" title="Close" aria-label="Close inspector">×</button>
   </div>
-  <div id="insChips" class="insChips"></div>
   <div id="insRows">
     <div class="insRow"><span>Speed</span><b id="insSpeed">–</b></div>
     <div class="insRow"><span>Desired</span><b id="insV0">–</b></div>
@@ -155,7 +157,6 @@
     <div class="insRow"><span>Reaction</span><b id="insReact">–</b></div>
     <div class="insRow"><span>Lane</span><b id="insLane">–</b></div>
     <div class="insRow"><span>On road</span><b id="insAge">–</b></div>
-    <div class="insRow wide"><span>Status</span><b id="insStatus">–</b></div>
   </div>
 </aside>
 

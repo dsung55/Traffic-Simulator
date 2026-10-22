@@ -185,7 +185,7 @@ function phantomBrake() {
     res = car;
   }
   const who = res && res.id != null ? res : car;
-  toast(`${who ? 'Car #' + who.id : 'A driver'} slammed on the brakes. Watch the slowdown travel backward.`, 'warn');
+  toast(`${who ? 'Car #' + who.id : 'A driver'} braked hard. Watch the slowdown travel backward.`, 'warn');
 }
 
 function toggleHeatmap() { setSim('showHeatmap', !sim.showHeatmap, { quiet: true }); }
@@ -284,7 +284,7 @@ function deltaFor(m, cur, base) {
   const arrow = diff > 0 ? '▲' : '▼';
   const txt = Math.abs(base) > 1e-6 && m.key !== 'rampQueue'
     ? `${arrow} ${Math.round(Math.abs(diff / base) * 100)}%`
-    : `${arrow} ${fmt(Math.abs(diff), m.d)}`;
+    : `${arrow} ${fmt(Math.abs(diff), Math.abs(diff) < 10 ? 1 : 0)}`;
   const cls = !m.better ? 'neutral' : (diff * m.better > 0 ? 'better' : 'worse');
   return { text: txt, cls };
 }
@@ -366,7 +366,7 @@ function updateMetrics() {
     const changes = settingChanges();
     const ch = $('baseChanges');
     if (!changes.length) {
-      ch.innerHTML = '<span class="chg none">No settings changed yet: change one factor to test it.</span>';
+      ch.innerHTML = '<span class="chg none">nothing yet. Change one factor to test it.</span>';
     } else {
       ch.innerHTML = changes.slice(0, 3).map(c =>
         `<span class="chg"><em>${c.label}</em> ${c.from} <span aria-hidden="true">→</span><span class="sr"> to </span> <b>${c.to}</b></span>`).join('') +
@@ -445,7 +445,7 @@ function startExperiment(e) {
     li.append(b);
     ol.append(li);
   });
-  if (isMobile()) document.body.classList.remove('metrics-open');
+  if (isMobile()) { setSheet('metrics-open', false); setSheet('controls-open', false); }
   syncAll();
   updateMetrics();
   toast(`Experiment: ${e.title}`);
@@ -550,7 +550,7 @@ function updateInspector() {
     : (car.accel || 0) > 0.05 ? 'Accelerating' : 'Cruising';
   if (car.exiting && !st.includes('xit')) st += ' · exiting';
   $('insStatus').textContent = st;
-  $('insStatus').className = car.distracted ? 'warnTxt' : car.braking ? 'badTxt' : '';
+  $('insStatus').className = 'insStatus' + (car.distracted ? ' warnTxt' : car.braking ? ' badTxt' : '');
   $('insAge').textContent = clock(car.age || 0);
 }
 
@@ -585,13 +585,22 @@ function trackBarHeights() {
   }
 }
 
-function bindBarToggle(btnId, cls, after) {
-  const btn = $(btnId);
-  btn.addEventListener('click', () => {
-    const open = document.body.classList.toggle(cls);
-    btn.setAttribute('aria-expanded', String(open));
-    if (after) after(open);
-  });
+// Mobile sheets: the metrics drawer (top) and the control sheet (bottom) are
+// mutually exclusive so the road always stays visible between them.
+const SHEETS = { 'controls-open': 'ctlToggle', 'metrics-open': 'metricsToggle' };
+function setSheet(cls, open) {
+  document.body.classList.toggle(cls, open);
+  $(SHEETS[cls]).setAttribute('aria-expanded', String(open));
+  if (open) {
+    for (const other of Object.keys(SHEETS)) if (other !== cls) setSheet(other, false);
+  }
+  if (cls === 'metrics-open') {
+    $('metricsToggle').setAttribute('aria-label', open ? 'Hide extra metrics' : 'Show all metrics and charts');
+    if (open) requestAnimationFrame(drawCharts);
+  }
+}
+function bindBarToggle(btnId, cls) {
+  $(btnId).addEventListener('click', () => setSheet(cls, !document.body.classList.contains(cls)));
 }
 
 function segKeys(seg) {
@@ -698,6 +707,10 @@ function bindUI(o = {}) {
     $('gCollapse').setAttribute('aria-expanded', String(!c));
     $('gCollapse').setAttribute('aria-label', c ? 'Expand guide' : 'Collapse guide');
   });
+  $('gWhyBtn').addEventListener('click', () => {
+    const on = $('guide').classList.toggle('showWhy');
+    $('gWhyBtn').setAttribute('aria-expanded', String(on));
+  });
   $('onExp').addEventListener('click', () => { dismissOnboarding(); openDialog('expMenu'); });
   $('onClose').addEventListener('click', dismissOnboarding);
 
@@ -708,10 +721,7 @@ function bindUI(o = {}) {
   }
 
   bindBarToggle('ctlToggle', 'controls-open');
-  bindBarToggle('metricsToggle', 'metrics-open', open => {
-    $('metricsToggle').setAttribute('aria-label', open ? 'Hide extra metrics' : 'Show all metrics and charts');
-    if (open) requestAnimationFrame(drawCharts);
-  });
+  bindBarToggle('metricsToggle', 'metrics-open');
   bindChartHover('tsChart', v => { tsHover = v; });
   bindChartHover('fdChart', v => { fdHover = v; });
   bindKeys();
