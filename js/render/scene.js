@@ -343,21 +343,29 @@ function paintHighwayGround(g) {
     g.stroke();
     g.restore();
   }
-  // on-ramp gore chevrons (between the ramp and the mainline shoulder)
+  // on-ramp gore: the painted sliver where the ramp's inner edge converges on
+  // the mainline shoulder, hatched with chevrons
   {
-    g.save();
-    g.beginPath();
-    g.moveTo(G.rsX, ry + G.outerSh);
-    for (let k = G.onLUT.pts.length - 1; k >= 0; k--) { const p = G.onLUT.pts[k]; g.lineTo(p.x, p.y - LH / 2 - 1); }
-    g.lineTo(G.onLUT.pts[0].x, ry + G.outerSh);
-    g.closePath();
-    g.clip();
-    g.fillStyle = P.shoulder; g.fillRect(G.rsX - LH * 7, ry, LH * 7, LH * 2);
-    g.strokeStyle = P.line; g.lineWidth = lw * 1.1;
-    g.beginPath();
-    for (let x = G.rsX - LH * 0.5; x > G.rsX - LH * 7; x -= LH * 0.75) { g.moveTo(x, ry + G.outerSh); g.lineTo(x - LH * 0.6, ry + G.outerSh + LH * 0.9); }
-    g.stroke();
-    g.restore();
+    const yS = ry + G.outerSh, pts = [];
+    for (const p of G.onLUT.pts) {
+      const te = p.y - LH / 2 * Math.cos(p.a);
+      if (te > yS && te - yS < LH * 1.1) pts.push([p.x + LH / 2 * Math.sin(p.a), te]);
+    }
+    if (pts.length > 1) {
+      g.save();
+      g.beginPath();
+      g.moveTo(pts[0][0], yS);
+      for (const q of pts) g.lineTo(q[0], q[1]);
+      g.lineTo(pts[pts.length - 1][0], yS);
+      g.closePath();
+      g.fillStyle = P.shoulder; g.fill();
+      g.clip();
+      g.strokeStyle = P.line; g.lineWidth = lw;
+      g.beginPath();
+      for (let x = pts[pts.length - 1][0]; x > pts[0][0] - LH; x -= LH * 0.7) { g.moveTo(x, yS); g.lineTo(x - LH * 0.5, yS + LH * 1.1); }
+      g.stroke();
+      g.restore();
+    }
   }
   // inductive loop detectors at the counting station
   g.strokeStyle = 'rgba(12,12,14,.32)'; g.lineWidth = Math.max(0.4, LH * 0.022);
@@ -928,7 +936,7 @@ function paintCityTop(g) {
   // signal mast arms: pole on the far-side corner, arm reaching over the
   // arterial lanes with one head per lane (lamps lit dynamically).
   for (const it of G.inters) {
-    const px = it.sx1 + LH * 0.45, py = G.curbBot + LH * 0.35;
+    const px = it.cw1 + G.cwW + LH * 0.3, py = G.curbBot + G.walkW * 0.45;
     const armTop = top + LH * 0.1;
     g.strokeStyle = 'rgba(0,0,0,.28)'; g.lineWidth = Math.max(1, LH * 0.1);
     g.beginPath(); g.moveTo(px + LH * 0.3, py + LH * 0.2); g.lineTo(px + LH * 0.3, armTop + LH * 0.2); g.stroke();
@@ -957,7 +965,7 @@ function paintCityTop(g) {
 // lane, plus one cross-street head). Shared with the dynamic lamp pass.
 export function signalHeads(G, it) {
   const { LH } = G;
-  const px = it.sx1 + LH * 0.45;
+  const px = it.cw1 + G.cwW + LH * 0.3;
   const out = [];
   const hw = Math.max(2.2, LH * 0.2), hh = hw * 2.6;
   for (let l = 0; l < sim.lanes; l++) {

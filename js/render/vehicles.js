@@ -151,17 +151,18 @@ function wheelsAt(g, xs, hw, wl, wt) {
     rr(g, x - wl / 2, hw - wt * 0.65, wl, wt, wt * 0.4);
   }
 }
-function lampsBaked(g, x0, x1, hw, h, rear = '#7d1414', front = '#e9eef2') {
-  const lw = Math.max(0.6, h * 0.08), lh = h * 0.2;
+function lampsBaked(g, x0, x1, hw, h, rear = '#8a1717', front = '#e4ebf1') {
+  const lw = Math.max(0.5, h * 0.06), lh = h * 0.17, r = Math.min(lw, lh) * 0.45;
+  const yi = h * 0.1;
   g.fillStyle = rear;
-  g.fillRect(x0, -hw + h * 0.07, lw, lh); g.fillRect(x0, hw - h * 0.07 - lh, lw, lh);
+  rr(g, x0, -hw + yi, lw, lh, r); rr(g, x0, hw - yi - lh, lw, lh, r);
   g.fillStyle = front;
-  g.fillRect(x1 - lw, -hw + h * 0.08, lw, lh * 0.9); g.fillRect(x1 - lw, hw - h * 0.08 - lh * 0.9, lw, lh * 0.9);
+  rr(g, x1 - lw * 1.1, -hw + yi, lw, lh, r); rr(g, x1 - lw * 1.1, hw - yi - lh, lw, lh, r);
 }
 
 //──────────────────────── Body painters (local frame) ────────────────────────
 // lod = on-screen length in device px; gates fine detail.
-function paintCarLike(g, kind, p, len, h, lod, av) {
+function paintCarLike(g, kind, p, len, h, lod, av, roofP) {
   const hw = h / 2, x0 = -len / 2, x1 = len / 2, L = len;
   const u = f => x0 + L * f;
   const isSuv = kind === 'suv', isVan = kind === 'van', isPick = kind === 'pickup', isHatch = kind === 'hatch';
@@ -181,33 +182,48 @@ function paintCarLike(g, kind, p, len, h, lod, av) {
     rr(g, u(0.3), -hw * 0.66, L * 0.42, hw * 1.32, h * 0.12);
     return;
   }
-  // Cabin geometry per body style (fractions of length from the rear).
-  let rw0, rw1, rf0, rf1, ws1;
-  if (isVan) { rw0 = 0.03; rw1 = 0.08; rf0 = 0.08; rf1 = 0.74; ws1 = 0.84; }
-  else if (isSuv) { rw0 = 0.07; rw1 = 0.13; rf0 = 0.13; rf1 = 0.64; ws1 = 0.75; }
-  else if (isPick) { rw0 = 0.42; rw1 = 0.45; rf0 = 0.45; rf1 = 0.64; ws1 = 0.74; }
-  else if (isHatch) { rw0 = 0.07; rw1 = 0.17; rf0 = 0.17; rf1 = 0.58; ws1 = 0.71; }
-  else { rw0 = 0.17; rw1 = 0.29; rf0 = 0.29; rf1 = 0.58; ws1 = 0.72; }
-  const gw = hw * 0.80, rwI = hw * 0.62;             // glass / roof half-widths
-  // Greenhouse (all glass), then the roof panel laid over it.
+  // Cabin geometry per body style (fractions of length from the rear):
+  // rear-window start, roof start, roof end (= windshield start), windshield end.
+  let rw0, rf0, rf1, ws1;
+  if (isVan) { rw0 = 0.03; rf0 = 0.07; rf1 = 0.74; ws1 = 0.85; }
+  else if (isSuv) { rw0 = 0.06; rf0 = 0.12; rf1 = 0.62; ws1 = 0.75; }
+  else if (isPick) { rw0 = 0.41; rf0 = 0.44; rf1 = 0.63; ws1 = 0.75; }
+  else if (isHatch) { rw0 = 0.07; rf0 = 0.17; rf1 = 0.58; ws1 = 0.72; }
+  else { rw0 = 0.15; rf0 = 0.28; rf1 = 0.58; ws1 = 0.73; }
+  const gw = hw * 0.80;                              // glass half-width at the hood/trunk
+  const rwI = hw * 0.70;                             // roof half-width
+  // Greenhouse silhouette: rear window → side glass → windshield (one dark
+  // shape), with the roof panel laid over it leaving thin side windows.
   g.fillStyle = glassGrad(g, u(rw0), u(ws1));
-  trap(g, u(rw0), rwI, u(ws1), gw * 0.98, h * 0.1);
-  g.fill();
-  // roof panel
+  g.beginPath();
+  g.moveTo(u(rw0), -gw * 0.86);
+  g.quadraticCurveTo(u(rw0 + 0.01), -gw * 0.98, u(rf0), -gw * 0.95);
+  g.lineTo(u(rf1), -gw * 0.97);
+  g.quadraticCurveTo(u(ws1), -gw * 1.0, u(ws1), -gw * 0.6);
+  g.quadraticCurveTo(u(ws1 + 0.012), 0, u(ws1), gw * 0.6);
+  g.quadraticCurveTo(u(ws1), gw * 1.0, u(rf1), gw * 0.97);
+  g.lineTo(u(rf0), gw * 0.95);
+  g.quadraticCurveTo(u(rw0 + 0.01), gw * 0.98, u(rw0), gw * 0.86);
+  g.quadraticCurveTo(u(rw0 - 0.012), 0, u(rw0), -gw * 0.86);
+  g.closePath(); g.fill();
+  // roof panel (body colour, or a contrasting roof e.g. police white)
+  const rp = roofP || p;
   const rg = g.createLinearGradient(0, -rwI, 0, rwI);
-  rg.addColorStop(0, shade(p, 12)); rg.addColorStop(0.5, shade(p, 6)); rg.addColorStop(1, shade(p, -6));
+  rg.addColorStop(0, shade(rp, 10)); rg.addColorStop(0.35, shade(rp, 7)); rg.addColorStop(1, shade(rp, -8));
   g.fillStyle = rg;
-  rr(g, u(rf0), -rwI * 0.92, L * (rf1 - rf0), rwI * 1.84, h * 0.12);
-  // windshield glint + rear-window glint
+  rr(g, u(rf0), -rwI, L * (rf1 - rf0), rwI * 2, Math.min(h * 0.16, L * 0.05));
   if (lod > 18) {
-    g.fillStyle = 'rgba(190,215,240,.28)';
+    // sky reflection sweeping across the windshield + rear window
+    g.fillStyle = 'rgba(200,222,245,.22)';
     g.beginPath();
-    g.moveTo(u(rf1 + 0.025), -gw * 0.6); g.lineTo(u(rf1 + 0.06), -gw * 0.6);
-    g.lineTo(u(rf1 + 0.035), gw * 0.25); g.lineTo(u(rf1 + 0.01), gw * 0.25);
+    g.moveTo(u(rf1 + 0.012), -gw * 0.9); g.lineTo(u(rf1 + 0.055), -gw * 0.9);
+    g.lineTo(u(rf1 + 0.03), gw * 0.1); g.lineTo(u(rf1 + 0.006), gw * 0.1);
     g.closePath(); g.fill();
+    g.fillStyle = 'rgba(200,222,245,.14)';
+    g.fillRect(u(rw0 + 0.012), -gw * 0.7, L * 0.018, gw * 0.9);
     // roof sheen
-    g.fillStyle = 'rgba(255,255,255,.14)';
-    rr(g, u(rf0 + 0.03), -rwI * 0.75, L * (rf1 - rf0 - 0.06), rwI * 0.45, h * 0.08);
+    g.fillStyle = 'rgba(255,255,255,.13)';
+    rr(g, u(rf0 + 0.03), -rwI * 0.78, L * (rf1 - rf0 - 0.06), rwI * 0.5, h * 0.08);
   }
   if (isPick) {                                      // open cargo bed
     g.fillStyle = shade(p, -22);
@@ -243,7 +259,7 @@ function paintCarLike(g, kind, p, len, h, lod, av) {
 
 // Lidar puck on the roof + teal accent: subtle, but distinctive once you know it.
 function avSensor(g, x, h, lod) {
-  const r = Math.max(0.9, h * 0.15);
+  const r = Math.max(0.8, h * 0.12);
   g.fillStyle = '#1b1f24';
   g.beginPath(); g.arc(x, 0, r, 0, 7); g.fill();
   g.strokeStyle = '#3fe0d0'; g.lineWidth = Math.max(0.5, r * 0.35);
@@ -294,7 +310,7 @@ function paintSemi(g, spec, len, h, lod) {
     rr(g, cx0 + cL * 0.5, -hw * 0.8, cL * 0.13, hw * 1.6, h * 0.05);
     if (lod > 34) {
       g.fillStyle = '#b9bcc2';                       // exhaust stacks
-      g.beginPath(); g.arc(cx0 + cL * 0.47, -hw * 0.86, h * 0.05, 0, 7); g.arc(cx0 + cL * 0.47, hw * 0.86, h * 0.05, 0, 7); g.fill();
+      g.beginPath(); g.arc(cx0 + cL * 0.02, -hw * 0.7, h * 0.045, 0, 7); g.arc(cx0 + cL * 0.02, hw * 0.7, h * 0.045, 0, 7); g.fill();
       g.fillStyle = 'rgba(0,0,0,.25)';               // hood seam
       g.fillRect(cx0 + cL * 0.8, -hw * 0.7, Math.max(0.4, h * 0.02), hw * 1.4);
       g.fillStyle = shade(cab, -10);                 // mirrors
@@ -378,9 +394,7 @@ function paintBus(g, spec, len, h, lod) {
 function paintEmergency(g, kind, len, h, lod) {
   const hw = h / 2, x0 = -len / 2, L = len, u = f => x0 + L * f;
   if (kind === 'police') {
-    paintCarLike(g, 'sedan', { h: 220, s: 8, l: 14 }, len, h, lod, false);
-    g.fillStyle = '#f1f2f4';                         // white doors / roof
-    rr(g, u(0.3), -hw * 0.55, L * 0.26, hw * 1.1, h * 0.1);
+    paintCarLike(g, 'sedan', { h: 220, s: 8, l: 14 }, len, h, lod, false, { h: 220, s: 4, l: 94 });
     return;
   }
   const isFire = kind === 'fire';
@@ -419,7 +433,7 @@ export function paintVehicle(g, spec, len, h, lod) {
   else if (k === 'box') paintBox(g, spec, len, h, lod);
   else if (k === 'bus') paintBus(g, spec, len, h, lod);
   else if (k === 'police' || k === 'ambulance' || k === 'fire') paintEmergency(g, k, len, h, lod);
-  else paintCarLike(g, k, spec.paint, len, h, lod, spec.av);
+  else paintCarLike(g, k, spec.paint, len, h, lod, spec.av, spec.roof);
 }
 
 //──────────────────────── Sprite cache ────────────────────────

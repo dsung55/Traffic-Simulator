@@ -33,7 +33,7 @@ export function drawHeatmap(ctx) {
   for (let l = 0; l < rows; l++) {
     const y = G.top + l * LH;
     const gr = ctx.createLinearGradient(0, 0, view.W, 0);
-    let any = false;
+    let any = false, last = 1;
     for (let i = 0; i < N; i++) {
       // nearest-data blend within ±3 cells so the tint reads as a band
       let s = 0, w = 0;
@@ -44,8 +44,8 @@ export function drawHeatmap(ctx) {
         s += (hSum[l * N + j] / hCnt[l * N + j]) * wt; w += wt;
       }
       const stop = (i + 0.5) / N;
-      if (w) { gr.addColorStop(stop, speedColor(s / w, 0.42)); any = true; }
-      else gr.addColorStop(stop, 'rgba(0,0,0,0)');
+      if (w) { last = s / w; gr.addColorStop(stop, speedColor(last, 0.42)); any = true; }
+      else gr.addColorStop(stop, speedColor(last, 0));
     }
     if (!any) continue;
     ctx.fillStyle = gr;
