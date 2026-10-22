@@ -64,9 +64,12 @@ const DECEL_LANE_LEN = 18;
 //     run ≈ 1 s, cautious drivers ≈ 1.8–2 s, trucks ≈ 1.7–2.2 s. Those are
 //     GROSS (front-to-front) headways; IDM's T is the NET time gap, and our
 //     render-scale bodies (11 m cars, 28 m rigs) eat ≈0.4 s of headway at
-//     speed, so T is set ≈0.25 s below the measured headways. With IDM+ this
-//     puts single-lane capacity at ≈2,000–2,200 veh/h (HCM: 2,250–2,400
-//     pc/h/ln basic freeway; ≈1,900–2,100 observed with real truck mixes).
+//     speed, so T is set ≈0.4–0.5 s below the measured headways (gross
+//     headway at 65 mph ≈ 1.3 s normal, 1.1 s tailgater, 1.6 s cautious —
+//     near-capacity freeway values). With IDM+ and the default mix (10 %
+//     trucks, 15 % aggressive/passive, 0.8 s reaction) the basic segment
+//     carries ≈1,850–1,950 veh/h/ln and the on-ramp merge ≈1,700 veh/h/ln
+//     before breaking down (HCM: 2,250–2,400 pc/h/ln basic freeway).
 //   • Standstill bumper gaps in stopped queues ≈ 2–4 m (IDM s0 = 2–3 m).
 //   • MOBIL (Kesting/Treiber/Helbing, TRR 1999, 2007): politeness p ≈ 0.2–0.5,
 //     switching threshold Δa_th = 0.1 m/s², keep-right bias Δa_bias = 0.3 m/s²,
@@ -89,16 +92,16 @@ const DECEL_LANE_LEN = 18;
 //   patience   : seconds to keep signalling for a gap before giving up
 const PROFILES = {
   //                          T (s)  2 m    2.25 m/s²  3.0 m/s²
-  aggressive: { v0Mult: 1.06, T: 0.8, s0: 0.27, a: 0.30, b: 0.40,
+  aggressive: { v0Mult: 1.04, T: 0.7, s0: 0.27, a: 0.30, b: 0.40,
                 //          0.1 m/s² Δa_th   0.1 m/s²      0.3 m/s² left pull
                 politeness: 0.05, threshold: 0.013, biasRight: 0.000, leftPref: 0.04,
                 signalTime: 0.9, gapAccept: 0.70, patience: 5 },
   //                          T (s)  3 m    1.4 m/s²   2.0 m/s²
-  normal:     { v0Mult: 1.00, T: 1.0, s0: 0.40, a: 0.19, b: 0.27,
+  normal:     { v0Mult: 1.00, T: 0.9, s0: 0.40, a: 0.19, b: 0.27,
                 politeness: 0.30, threshold: 0.013, biasRight: 0.013, leftPref: 0.007,
                 signalTime: 1.5, gapAccept: 1.00, patience: 8 },
   //                          T (s)  4 m    1.0 m/s²   1.6 m/s²
-  passive:    { v0Mult: 0.94, T: 1.3, s0: 0.53, a: 0.13, b: 0.21,
+  passive:    { v0Mult: 0.96, T: 1.2, s0: 0.53, a: 0.13, b: 0.21,
                 politeness: 0.50, threshold: 0.027, biasRight: 0.027, leftPref: 0.00,
                 signalTime: 2.0, gapAccept: 1.30, patience: 11 },
 };
@@ -106,17 +109,17 @@ const PROFILES = {
 // speed (≈60 mph), longer headway (net 1.5 s ≈ 1.9 s gross, NGSIM truck median), 5 m standstill
 // gap, loaded-rig accel ≈0.6 m/s², gentle service braking ≈1.3 m/s², strong
 // keep-right discipline (0.5 m/s² bias).
-const TRUCK_OVERRIDE = { v0Cap: 3.6, T: 1.4, s0: 0.67, a: 0.08, b: 0.17,
+const TRUCK_OVERRIDE = { v0Cap: 3.6, T: 1.3, s0: 0.67, a: 0.08, b: 0.17,
                          politeness: 0.45, threshold: 0.027, biasRight: 0.067, leftPref: 0,
                          signalTime: 2.0, gapAccept: 1.25, patience: 12 };
 // Automated vehicles (AV / cooperative adaptive cruise). Controlled by the
 // Kesting–Treiber ACC model (IDM + constant-acceleration heuristic, coolness
 // c = 0.99; Kesting, Treiber, Schönhof & Helbing, Phil. Trans. R. Soc. A 2010):
-// no human reaction delay, a stable 1.0 s time gap (production ACC offers
+// no human reaction delay, a stable 0.8 s time gap (production ACC offers
 // ≈1.0–2.2 s; CACC studies use 0.6–1.1 s), smooth ≈1.5 m/s² acceleration,
 // 2 m/s² comfortable braking, exact speed-limit compliance and calm, polite
 // lane changing (high politeness, high threshold, long signal).
-const AV_PROFILE = { v0Mult: 1.00, T: 0.9, s0: 0.27, a: 0.20, b: 0.27,
+const AV_PROFILE = { v0Mult: 1.00, T: 0.8, s0: 0.27, a: 0.20, b: 0.27,
                      politeness: 0.50, threshold: 0.027, biasRight: 0.013, leftPref: 0.0,
                      signalTime: 2.0, gapAccept: 1.10, patience: 10 };
 const ACC_COOLNESS = 0.99;     // ACC model coolness factor c (Kesting et al. 2010)
@@ -148,8 +151,10 @@ const PHANTOM_DUR = 2;               // s
 // data) measured the queue-discharge capacity of the remaining lanes at an
 // incident ~50 % below normal per lane, and ~30 % lower in the OPPOSITE
 // direction purely from gawking. Modelled as a desired-speed and time-gap
-// penalty in a zone around the incident, faded in/out linearly.
-const RUBBERNECK = { from: -12, full: -6, until: 3, to: 7, v0Mul: 0.55, Tmul: 1.35 };
+// penalty in a zone alongside and just past the scene (where drivers are
+// looking at it), faded in/out linearly — it throttles the open lanes'
+// discharge rather than the merge upstream.
+const RUBBERNECK = { from: -5, full: -1, until: 5, to: 10, v0Mul: 0.4, Tmul: 1.8 };
 
 // Variable speed limit / speed harmonisation (e.g. WSDOT I-5, UK M25 / MIDAS,
 // Hegyi et al. SPECIALIST 2008). A detector just upstream of the bottleneck
@@ -218,9 +223,10 @@ const SCENARIOS = {
     // deceleration lane opens DECEL_LANE_LEN cells before the gore (cell 52).
     hasRamp: true, onRampCell: 14, offRampCell: 70,
     hasIncident: true, lightCells: null, style: 'highway',
-    // Default mainline demand (veh/h per lane): ~75 % of a lane's capacity, so
-    // the on-ramp merge sits right at the edge of breakdown.
-    defaultDemandVph: 1500,
+    // Default mainline demand (veh/h per lane) + 500 veh/h on the ramp: about
+    // 70 % of capacity downstream of the merge — busy but free-flowing
+    // (LOS B–C), so adding a factor shows its effect from a stable baseline.
+    defaultDemandVph: 1200, defaultRampDemandVph: 500,
   },
   city: {
     label: 'City Arterial',

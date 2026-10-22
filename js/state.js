@@ -14,8 +14,8 @@ const sim = {
   // rampDemandVph feeds the on-ramp. The number of cars on the road is no
   // longer set directly — density emerges from demand vs. what the road can
   // carry. targetCars survives only for backwards compatibility (unused).
-  demandVph: 1500,
-  rampDemandVph: 600,
+  demandVph: 1200,
+  rampDemandVph: 500,
   targetCars: 60,
   pctTrucks: 10, pctAgg: 15, pctPas: 15,
   pctAV: 0,            // % automated vehicles (ACC control, no reaction delay)
@@ -51,7 +51,8 @@ const sim = {
 
   // rolling event logs (sim-time stamps) for windowed metrics
   evThroughput: [], evLaneChanges: [], evStops: [],
-  evTravel: [],        // completed trips { t, travel, delay, stops } (last ~120 s)
+  evTravel: [],        // completed trips { t, travel, delay, stops, wait, ramp } (last ~120 s)
+  evEntryWait: [],     // vehicles entering the road { t, wait, ramp } (last ~120 s)
   statSamples: [],     // per-tick { t, sumV, n, nMain } for rolling speed/density
   speedHistory: [],    // sparkline samples (mph), one per metrics update
   lastTickWall: (typeof performance !== 'undefined' ? performance : Date).now(),
@@ -117,8 +118,8 @@ function vmaxFloat() {
 }
 // Stable per-car desired-speed multiplier, drawn once per profile assignment.
 function rollSpeedFactor(profName) {
-  if (profName === 'aggressive') return 1.02 + rng() * 0.06; // a touch over
-  if (profName === 'passive')    return 0.94 + rng() * 0.05; // a touch under
+  if (profName === 'aggressive') return 1.01 + rng() * 0.05; // a touch over
+  if (profName === 'passive')    return 0.95 + rng() * 0.05; // a touch under
   if (profName === 'av')         return 1.0;                 // exactly the limit
   return 0.98 + rng() * 0.04;                                // ≈ at the limit
 }

@@ -141,7 +141,7 @@ function makeCar(lane, cell, v) {
     distracted: false, distractUntil: 0, lapseA: 0,
     phantomUntil: -Infinity, phantom: false,
     // Trip bookkeeping for travel-time / delay / stops statistics.
-    arriveTime: sim.time, spawnCell: cell, stops: 0, stopped: false,
+    arriveTime: sim.time, enterTime: sim.time, spawnCell: cell, stops: 0, stopped: false,
     color: carColor(profName, isTruck, isAV),
   };
 }
@@ -415,6 +415,23 @@ function accelInLane(car, lane, skipWall) {
     }
   }
 
+  // Lane closure ahead: a driver in a blocked lane who must merge left
+  // SYNCHRONISES with the target lane instead of racing up the empty closed
+  // lane — it car-follows the target lane's next vehicle at a relaxed gap so it
+  // drifts alongside a gap (the speed-adaptation step of merging models,
+  // e.g. Hidas 2002; Treiber & Kesting §14). Without this nearly every car
+  // reaches the wreck before merging and the closure jams solid.
+  if (lane === car.lane && laneBlocked(lane) && lane > 0) {
+    const d = INCIDENT_CELL - car.cell;
+    if (d > 0 && d < 40) {
+      const adj = leaderInLane(car, lane - 1, 30);
+      if (adj.lead && adj.leadV < car.v) {
+        const accSync = idmAccel(car, adj.gap + 1.5, adj.leadV, adj.lead.accA || 0);
+        if (accSync < acc) acc = Math.max(accSync, -drv(car).b);
+      }
+    }
+  }
+
   // Exit-ramp approach: a driver committed to the off-ramp and now in the
   // DECELERATION lane sheds speed GRADUALLY toward the ramp advisory, following
   // a comfortable kinematic envelope v(d) = sqrt(v_ramp² + 2·b·d) toward the
@@ -611,7 +628,7 @@ function lcUrgency(car) {
     // Escaping a closed lane: pressure builds toward the block (cf. the
     // on-ramp gore) so a stranded driver eventually takes a tight zipper gap.
     const d = INCIDENT_CELL - car.cell;
-    if (d >= 0) u = Math.max(u, d < 3 ? 0.85 : d < 8 ? 0.6 : d < 16 ? 0.35 : 0.15);
+    if (d >= 0) u = Math.max(u, d < 3 ? 0.9 : d < 8 ? 0.7 : d < 16 ? 0.5 : 0.35);
   }
   return u;
 }
@@ -748,7 +765,7 @@ function laneChangeStep() {
     //    index), which followers there honour zipper-style.
     if (laneBlocked(car.lane)) {
       const d = INCIDENT_CELL - car.cell;
-      if (d >= 0 && d < 24 && car.lane > 0) { startSignal(car, car.lane - 1, true); continue; }
+      if (d >= 0 && d < 40 && car.lane > 0) { startSignal(car, car.lane - 1, true); continue; }
     }
 
     // ── Truck lane restriction: a heavy vehicle in the banned left lane moves
@@ -900,8 +917,8 @@ function histAt(car, steps) {
 //    string-unstable and small perturbations grow into stop-and-go waves —
 //    Treiber, Kesting & Helbing, Physica A 2006, "Delays, inaccuracies and
 //    anticipation in microscopic traffic models").
-//  • Critical situations (the undelayed model asks for more than the
-//    comfortable decel b) trigger reflex braking that bypasses the delay —
+//  • Clear braking cues (the undelayed model asks for more than half the
+//    comfortable decel b — brake lights ahead, a closing gap) trigger braking that bypasses the delay —
 //    the "surprise" brake that keeps the delayed driver from colliding, and
 //    the reason late reactions turn into HARD braking (wave amplification).
 //  • Distracted drivers hold their speed during a lapse; they look up early
@@ -912,7 +929,7 @@ function controlAccel(car, aNow, t) {
   let a = aNow;
   if (!car.isAV) {
     const P = drv(car);
-    const critical = aNow < -P.b;
+    const critical = aNow < -0.5 * P.b;
     let cmd = aNow;
     if (car.distracted) {
       if (t >= car.distractUntil || critical) {
@@ -999,8 +1016,8 @@ function speedAndMoveStep() {
         const zf = car.zipperFor;
         const g = (zf.cell - car.cell) - (car.len || CAR_LEN);
         if (g > 0.05) {
-          // Desired extra room behind the merger: ~4 m, up to ~13 m when urgent.
-          const want = 0.5 + 1.2 * car.zipperU;
+          // Desired extra room behind the merger: ~2 m, up to ~8 m when urgent.
+          const want = 0.3 + 0.8 * car.zipperU;
           const az = idmAccel(car, Math.max(0.3, g - want), Math.min(zf.v, car.v));
           // Bound the zipper brake: ≈2 m/s² (comfortable) for a relaxed merger,
           // up to ≈4 m/s² for one wedged at the very end of its lane.
@@ -1101,15 +1118,26 @@ function speedAndMoveStep() {
 }
 
 //──────────────────────────── Trip statistics ────────────────────────────
-// Completed trip: travel time runs from the moment the vehicle ARRIVED (joined
-// the entry or ramp queue) to departure, so time spent queued upstream or at a
-// ramp meter counts. Delay = travel − free-flow time over the same distance
-// at the driver's own ideal desired speed (posted limit, clear weather) — so
-// weather, VSL and rubbernecking slowdowns all register as delay.
+// Completed trip: travel time runs from the moment the vehicle ENTERED the
+// visible road (left edge or acceleration lane) to departure. Time spent
+// waiting beforehand — in the entry queue (demand the road could not absorb)
+// or at the ramp meter — is logged separately at entry (sim.evEntryWait) so
+// it can be reported on its own instead of swamping travel times. Delay =
+// travel − free-flow time over the same distance at the driver's own ideal
+// desired speed (posted limit, clear weather) — so weather, VSL and
+// rubbernecking slowdowns all register as delay.
 function recordTrip(car, exitCell) {
-  const travel = sim.time - car.arriveTime;
+  const travel = sim.time - car.enterTime;
   const ff = Math.max(0, exitCell - car.spawnCell) / carV0Ideal(car);
-  sim.evTravel.push({ t: sim.time, travel, delay: Math.max(0, travel - ff), stops: car.stops });
+  sim.evTravel.push({
+    t: sim.time, travel, delay: Math.max(0, travel - ff), stops: car.stops,
+    wait: car.enterTime - car.arriveTime, ramp: !!car.fromRamp,
+  });
+}
+// A vehicle has just entered the road: log how long it waited to get on.
+function recordEntry(car) {
+  car.enterTime = sim.time;
+  sim.evEntryWait.push({ t: sim.time, wait: Math.max(0, sim.time - car.arriveTime), ramp: !!car.fromRamp });
 }
 
 // Rolling sample of the road state for windowed speed/density statistics.
@@ -1124,6 +1152,11 @@ function sampleStats() {
 //   flowVphPerLane     sensor (mid-road cross-section) flow, last 60 s
 //   densityVpmPerLane  mainline vehicles per mile per lane, last 30 s
 //   meanTravelTimeS / meanDelayS / stopsPerVeh   completed trips, last 120 s
+//                      (timed from entering the road — queue waits excluded)
+//   meanEntryWaitS     mean wait in the left-edge entry queue, vehicles that
+//                      entered in the last 120 s (0 when nothing queues)
+//   meanRampWaitS      mean wait at the on-ramp (meter) before entering the
+//                      acceleration lane, last 120 s (NaN without a ramp)
 //   vehOnRoad          vehicles currently on the strip
 //   laneChangesPerMin  lane changes begun, last 60 s
 //   rampQueue          vehicles waiting at the on-ramp meter
@@ -1139,6 +1172,8 @@ function getStats() {
   const trips = sim.evTravel.filter(e => e.t > now - 120);
   const mean = (arr, k) => arr.length ? arr.reduce((a, e) => a + e[k], 0) / arr.length : NaN;
   const per60 = cnt => (w60 >= 5 ? cnt * 60 / w60 : NaN);
+  const waits = sim.evEntryWait.filter(e => e.t > now - 120);
+  const mainW = waits.filter(e => !e.ramp), rampW = waits.filter(e => e.ramp);
   return {
     avgSpeedMph: n ? (sumV / n) * MPH_PER_CELL : NaN,
     flowVphPerLane: w60 >= 5
@@ -1152,6 +1187,8 @@ function getStats() {
     rampQueue: cfg().hasRamp ? sim.rampQueue : NaN,
     throughputPerMin: per60(sim.evTravel.filter(e => e.t > now - 60).length),
     entryQueue: sim.entryQueue,
+    meanEntryWaitS: mean(mainW, 'wait'),
+    meanRampWaitS: cfg().hasRamp ? mean(rampW, 'wait') : NaN,
     vslMph: sim.vslZone ? sim.vslMph : NaN,
   };
 }
@@ -1277,7 +1314,8 @@ function insertStep() {
       q.shift();
       car.cell = car.prevCell = x;
       car.v = car.startV = v;
-      car.spawnCell = 0;
+      car.spawnCell = x;
+      recordEntry(car);
       if (v < 0.3) { car.stopped = true; car.stops = 1; }   // joined a standing queue
       sim.cars.push(car);
     }
@@ -1372,7 +1410,9 @@ function releaseRampCar(entry) {
     car.prevCell = x;
     car.rampU = u;
     car.arriveTime = sim.rampQueueTimes.length ? sim.rampQueueTimes.shift() : sim.time;
-    car.spawnCell = entry;
+    car.spawnCell = x;
+    car.fromRamp = true;
+    recordEntry(car);
     // Blinker has been on since the ramp: it may move over at once.
     startSignal(car, sim.lanes - 1, true);
     car.lc.sigTime = 0;
@@ -1456,7 +1496,7 @@ function tick() {
   for (const k of ['evThroughput', 'evLaneChanges', 'evStops']) {
     if (sim[k].length && sim[k][0] <= cut) sim[k] = sim[k].filter(t => t > cut);
   }
-  for (const k of ['evTravel', 'statSamples']) {
+  for (const k of ['evTravel', 'statSamples', 'evEntryWait']) {
     if (sim[k].length && sim[k][0].t <= cut) sim[k] = sim[k].filter(e => e.t > cut);
   }
   sim.lastTickWall = nowMs();
@@ -1475,7 +1515,7 @@ function resetSim() {
   sim._demandSeen = undefined; sim._rampDemandSeen = undefined;
   sim.time = 0;
   sim.evThroughput = []; sim.evLaneChanges = []; sim.evStops = [];
-  sim.evTravel = []; sim.statSamples = [];
+  sim.evTravel = []; sim.statSamples = []; sim.evEntryWait = [];
   sim.speedHistory = [];
   sim._vsl = null; sim.vslMph = sim.speedMph;
   sim.vslZone = sim.vslOn && cfg().hasRamp ? sim.vslZone : null;
