@@ -24,7 +24,7 @@ import {
   view, cam, camT, cw as viewCw, roadTop as viewRoadTop, computeLaneH, tickMs, viewRect,
 } from './render/view.js';
 import { geo } from './render/geometry.js';
-import { rr, lutAt, clamp } from './render/util.js';
+import { rr, rrPath, lutAt, clamp } from './render/util.js';
 import {
   prepareScene, drawLayer, invalidateScene as invalidateStatic,
 } from './render/scene.js';
@@ -344,12 +344,13 @@ function collectCars(a) {
     }
     const spec = vehSpec(car);
     const h = bodyWidth(spec.kind, len);
-    car.drawX = x; car.drawY = cy; car.drawLen = len; car.drawH = h;
+    car.drawX = x; car.drawY = cy; car.drawLen = len; car.drawH = h; car.drawRot = rot;
     drawList.push({ car, cx, cy, len, h, rot, alpha, spec });
   }
 }
 
 const BRAKE_LATCH_MS = 350;
+const BEAM = { fog: 1.25, rain: 0.42, snow: 0.6 };   // headlight-beam strength by weather
 function brakeLevel(car) {
   const braking = car.braking || (Number.isFinite(car.accel) && car.accel < -0.06);
   if (braking) car.brakeWall = view.nowMs;
@@ -373,7 +374,7 @@ function drawCars() {
     for (const d of visible) {
       ctx.globalAlpha = d.alpha;
       ctx.save(); ctx.translate(d.cx, d.cy); if (d.rot) ctx.rotate(d.rot);
-      drawLamps(ctx, d.len, d.h, 0, 0, sim.weather === 'fog' ? 1.3 : 1, false);
+      drawLamps(ctx, d.len, d.h, 0, 0, BEAM[sim.weather] || 0.5, false);
       if (wet) {
         const bk = d.ghost ? 0 : (d.car._bk || 0);
         ctx.globalAlpha = d.alpha * (0.18 + 0.4 * bk);
@@ -412,22 +413,27 @@ function drawBadges(visible) {
   if (!show) return;
   for (const d of visible) {
     if (d.ghost || d.car.distracted !== true) continue;
-    drawPhoneBadge(ctx, d.cx, d.cy - d.h / 2 - 1 / cam.z, view.nowMs + d.car.id * 97);
+    drawPhoneBadge(ctx, d.cx, d.cy - d.h / 2 - 1 / cam.z, view.nowMs + d.car.id * 97, d.len, d.h, d.cx, d.cy);
   }
 }
 
-// Pulsing ring around the clicked vehicle.
+// Pulsing ring around the clicked vehicle, following its yaw.
 function drawSelection() {
   const car = sim.selected;
   if (!car || car.drawX === undefined || !sim.cars.includes(car)) return;
-  const h = car.drawH || LANE_H * 0.62, pad = 3;
+  const h = car.drawH || LANE_H * 0.5, len = car.drawLen, pad = 2.5 + 2 / cam.z;
   const pulse = 0.55 + 0.30 * Math.sin(view.nowMs / 240);
+  ctx.save();
+  ctx.translate(car.drawX + len / 2, car.drawY);
+  if (car.drawRot) ctx.rotate(car.drawRot);
+  rrPath(ctx, -len / 2 - pad, -h / 2 - pad, len + pad * 2, h + pad * 2, h * 0.35 + pad);
+  ctx.lineWidth = (1.4 / cam.z + 0.8) * 3;
+  ctx.strokeStyle = 'rgba(88,166,255,.16)';
+  ctx.stroke();
   ctx.lineWidth = 1.4 / cam.z + 0.8;
   ctx.strokeStyle = `rgba(88,166,255,${pulse.toFixed(3)})`;
-  ctx.strokeRect(car.drawX - pad, car.drawY - h / 2 - pad, car.drawLen + pad * 2, h + pad * 2);
-  ctx.lineWidth = (1.4 / cam.z + 0.8) * 3;
-  ctx.strokeStyle = 'rgba(88,166,255,.14)';
-  ctx.strokeRect(car.drawX - pad, car.drawY - h / 2 - pad, car.drawLen + pad * 2, h + pad * 2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 //──────────────────────────── Frame ────────────────────────────

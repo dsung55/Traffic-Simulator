@@ -434,6 +434,29 @@ export function paintVehicle(g, spec, len, h, lod) {
   else if (k === 'bus') paintBus(g, spec, len, h, lod);
   else if (k === 'police' || k === 'ambulance' || k === 'fire') paintEmergency(g, k, len, h, lod);
   else paintCarLike(g, k, spec.paint, len, h, lod, spec.av, spec.roof);
+  if (sim.weather === 'snow' && lod > 8) snowCover(g, k, len, h);
+}
+
+// A dusting of snow on roofs / trailer tops in snowy weather (baked into the
+// sprite; the weather is part of the sprite key).
+function snowCover(g, k, len, h) {
+  const hw = h / 2, x0 = -len / 2, L = len;
+  g.fillStyle = 'rgba(250,252,255,.82)';
+  if (k === 'semi' || k === 'box' || k === 'bus' || k === 'fire' || k === 'ambulance') {
+    const e = k === 'semi' ? 0.74 : k === 'box' ? 0.72 : 0.94;
+    rr(g, x0 + L * 0.02, -hw * 0.78, L * (e - 0.03), hw * 1.5, h * 0.2);
+    g.fillStyle = 'rgba(205,220,235,.5)';
+    g.fillRect(x0 + L * 0.02, hw * 0.45, L * (e - 0.03), hw * 0.27);
+    return;
+  }
+  if (k === 'pickup') { rr(g, x0 + L * 0.46, -hw * 0.6, L * 0.15, hw * 1.2, h * 0.15); return; }
+  const r0 = k === 'van' ? 0.1 : k === 'suv' ? 0.15 : k === 'hatch' ? 0.2 : 0.31;
+  const r1 = k === 'van' ? 0.72 : k === 'suv' ? 0.6 : 0.56;
+  g.beginPath();
+  g.ellipse(x0 + L * (r0 + r1) / 2, -hw * 0.05, L * (r1 - r0) / 2, hw * 0.6, 0, 0, 7);
+  g.fill();
+  g.fillStyle = 'rgba(205,220,235,.45)';
+  g.beginPath(); g.ellipse(x0 + L * (r0 + r1) / 2 + L * 0.02, hw * 0.25, L * (r1 - r0) / 2.4, hw * 0.25, 0, 0, 7); g.fill();
 }
 
 //──────────────────────── Sprite cache ────────────────────────
@@ -462,7 +485,7 @@ export function drawVehicle(ctx, spec, cx, cy, len, h, rot) {
   const bucket = Math.ceil(Math.log2(lodPx) * 6);
   const aspect = Math.round((h / len) * 40);
   if (!spec.key) spec.key = autoKey(spec);
-  const key = spec.key + '|' + bucket + '|' + aspect;
+  const key = spec.key + '|' + bucket + '|' + aspect + (sim.weather === 'snow' ? '|s' : '');
   let sp = sprites.get(key);
   if (!sp) {
     if (budget <= 0) {                // over this frame's budget: draw live
@@ -553,8 +576,8 @@ export function drawLamps(ctx, len, h, brake, signal, beams, hazard) {
   }
   if (brake > 0.02) {
     ctx.globalAlpha = Math.min(1, brake);
-    glow(ctx, GLOW_RED, x0, -hw * 0.62, h * 0.55, h * 0.42);
-    glow(ctx, GLOW_RED, x0, hw * 0.62, h * 0.55, h * 0.42);
+    glow(ctx, GLOW_RED, x0, -hw * 0.6, h * 0.42, h * 0.32);
+    glow(ctx, GLOW_RED, x0, hw * 0.6, h * 0.42, h * 0.32);
     ctx.fillStyle = '#ff2a1f';
     ctx.fillRect(x0, -hw + h * 0.06, lw, lh); ctx.fillRect(x0, hw - h * 0.06 - lh, lw, lh);
     ctx.globalAlpha = 1;
@@ -573,7 +596,7 @@ export function drawLamps(ctx, len, h, brake, signal, beams, hazard) {
 }
 
 // Emergency light bar (alternating red/blue strobes) on a vehicle roof.
-export function drawLightbar(ctx, len, h, t, kind) {
+export function drawLightbar(ctx, len, h, t, kind, lensOnly) {
   const hw = h / 2, x = kind === 'police' ? len * -0.03 : len * 0.32;
   const phase = Math.floor(t / 140) % 4;
   const leftOn = phase === 0 || phase === 2, rightOn = phase === 1 || phase === 3;
@@ -582,14 +605,24 @@ export function drawLightbar(ctx, len, h, t, kind) {
   ctx.fillRect(x - bw / 2, -hw * 0.75, bw, bh);
   ctx.fillStyle = rightOn ? '#3b7bff' : '#14235a';
   ctx.fillRect(x - bw / 2, hw * 0.75 - bh, bw, bh);
-  if (leftOn) glow(ctx, GLOW_RED, x, -hw * 0.5, h * 1.5);
-  if (rightOn) glow(ctx, GLOW_BLUE, x, hw * 0.5, h * 1.5);
+  if (lensOnly) return;
+  const a0 = ctx.globalAlpha;
+  ctx.globalAlpha = a0 * 0.75;
+  if (leftOn) glow(ctx, GLOW_RED, x, -hw * 1.05, h * 1.05, h * 0.9);
+  if (rightOn) glow(ctx, GLOW_BLUE, x, hw * 1.05, h * 1.05, h * 0.9);
+  ctx.globalAlpha = a0;
 }
 
 // Distracted-driver badge: a little phone in a speech bubble above the car,
 // fixed on-screen size regardless of zoom.
-export function drawPhoneBadge(ctx, x, y, t) {
-  const s = 1 / cam.z;
+export function drawPhoneBadge(ctx, x, y, t, len, h, cx, cy) {
+  // soft pulsing amber halo hugging the car body (attention lapse)
+  const pulse = 0.35 + 0.25 * Math.sin(t / 160);
+  ctx.strokeStyle = `rgba(255,196,60,${pulse.toFixed(3)})`;
+  ctx.lineWidth = Math.max(1.2 / cam.z, h * 0.12);
+  rrPath(ctx, cx - len / 2 - h * 0.12, cy - h * 0.62, len + h * 0.24, h * 1.24, h * 0.4);
+  ctx.stroke();
+  const s = 1.45 / cam.z;
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(s, s);

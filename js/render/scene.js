@@ -533,12 +533,18 @@ function snowFinish(g, rnd, G, LH) {
   // slush between wheel paths (blurs the lane lines)
   for (let l = 0; l <= sim.lanes; l++) {
     const yb = top + l * LH;
-    for (let x = 0; x < W; x += LH * 0.6) {
-      g.fillStyle = `rgba(235,240,245,${(0.25 + rnd() * 0.3).toFixed(2)})`;
-      g.beginPath(); g.ellipse(x + rnd() * LH * 0.5, yb + (rnd() - 0.5) * LH * 0.12, LH * (0.3 + rnd() * 0.4), LH * (0.06 + rnd() * 0.07), 0, 0, 7); g.fill();
-    }
+    slushBand(g, rnd, W, yb, LH);
   }
   void ay;
+}
+
+// Packed slush between the wheel paths: long, thin, overlapping streaks.
+function slushBand(g, rnd, W, yb, LH) {
+  for (let x = -LH; x < W; x += LH * 0.35) {
+    g.fillStyle = `rgba(232,238,244,${(0.12 + rnd() * 0.22).toFixed(2)})`;
+    const len = LH * (0.6 + rnd() * 1.4), th = LH * (0.025 + rnd() * 0.05);
+    g.beginPath(); g.ellipse(x + len / 2, yb + (rnd() - 0.5) * LH * 0.3, len / 2, th, 0, 0, 7); g.fill();
+  }
 }
 
 function paintHighwayTop(g) {
@@ -791,7 +797,6 @@ function paintCityGround(g) {
         g.translate(x + stall / 2, yc);
         if (side === 0) g.rotate(Math.PI);
         paintVehicle(g, { kind, paint, av: false }, len, h, len * 3);
-        if (wk === 'snow') { g.fillStyle = 'rgba(248,250,252,.85)'; rr(g, -len * 0.32, -h * 0.36, len * 0.6, h * 0.72, h * 0.2); }
         g.restore();
       }
     }
@@ -801,10 +806,7 @@ function paintCityGround(g) {
     // slush along the gutters and over the lane lines
     for (let l = 0; l <= sim.lanes; l++) {
       const yb = top + l * LH;
-      for (let x = 0; x < W; x += LH * 0.6) {
-        g.fillStyle = `rgba(235,240,245,${(0.2 + rnd() * 0.3).toFixed(2)})`;
-        g.beginPath(); g.ellipse(x, yb + (rnd() - 0.5) * LH * 0.12, LH * (0.3 + rnd() * 0.4), LH * (0.06 + rnd() * 0.07), 0, 0, 7); g.fill();
-      }
+      slushBand(g, rnd, W, yb, LH);
     }
   }
 }

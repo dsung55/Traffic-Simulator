@@ -162,8 +162,9 @@ export function drawIncidentGround(ctx) {
   }
   ctx.stroke();
   // debris field + fluid spill
-  ctx.fillStyle = 'rgba(25,20,15,.35)';
-  ctx.beginPath(); ctx.ellipse(ix + c * 1.3, (yTop + yBot) / 2 + LH * 0.1, c * 1.1, LH * 0.35 * lanes.length, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(25,20,15,.16)';
+  ctx.beginPath(); ctx.ellipse(ix + c * 1.2, (yTop + yBot) / 2 + LH * 0.1, c * 0.9, LH * 0.28 * lanes.length, 0.3, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(ix + c * 1.9, (yTop + yBot) / 2 + LH * 0.25, c * 0.6, LH * 0.18 * lanes.length, -0.2, 0, 7); ctx.fill();
   for (let k = 0; k < 22; k++) {
     const dx = (hash01(k, 41) - 0.3) * c * 3.2, dy = hash01(k, 43) * (yBot - yTop);
     ctx.fillStyle = k % 3 ? 'rgba(200,210,220,.7)' : 'rgba(40,40,44,.8)';
@@ -247,6 +248,7 @@ export function drawIncidentResponders(ctx) {
     const h = bodyWidth(r.kind, r.len);
     ctx.save(); ctx.translate(r.x, r.y); ctx.rotate(r.rot);
     paintVehicle(ctx, { kind: r.kind }, r.len, h, r.len * cam.z * view.dpr);
+    drawLightbar(ctx, r.len, h, t + r.x * 7, r.kind, true);
     ctx.globalCompositeOperation = 'lighter';
     drawLightbar(ctx, r.len, h, t + r.x * 7, r.kind);
     drawLamps(ctx, r.len, h, 0, 0, 0, Math.floor(t / 380) % 2 === 0);
