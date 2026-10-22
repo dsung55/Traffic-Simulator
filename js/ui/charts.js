@@ -186,7 +186,7 @@ export function drawFD(cv, rows, baseline, hover) {
   g.font = FONT; g.fillStyle = DIM; g.textAlign = 'left';
   g.fillText('Flow vs density', padL + 2, top - 5);
   g.fillStyle = FAINT; g.font = FONT_SM; g.textAlign = 'right';
-  g.fillText('flow, veh/h/ln', w - padR, top - 5);
+  if (w >= 230) g.fillText('flow, veh/h/ln', w - padR, top - 5);
   if (!n) {
     g.textAlign = 'center'; g.fillStyle = FAINT; g.font = FONT;
     g.fillText('Collecting data…', padL + pw / 2, top + ph / 2);

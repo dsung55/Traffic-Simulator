@@ -629,6 +629,23 @@ function bindBarToggle(btnId, cls) {
   $(btnId).addEventListener('click', () => setSheet(cls, !document.body.classList.contains(cls)));
 }
 
+// Desktop "minimise panels": charts, baseline row and the control panel fold
+// away (tabs, header and KPI tiles stay) so the road stays visible at deep zoom.
+function setPanelsMin(on, save = true) {
+  document.body.classList.toggle('panels-min', on);
+  if (!isMobile()) {
+    $('metricsToggle').setAttribute('aria-expanded', String(!on));
+    $('metricsToggle').setAttribute('aria-label', on ? 'Show charts and controls (M)' : 'Minimise panels to see more road (M)');
+    $('metricsToggle').title = $('metricsToggle').getAttribute('aria-label');
+  }
+  if (save) store.set('ts-panels-min', on ? '1' : '0');
+  if (!on) requestAnimationFrame(drawCharts);
+}
+function togglePanels() {
+  if (isMobile()) setSheet('metrics-open', !document.body.classList.contains('metrics-open'));
+  else setPanelsMin(!document.body.classList.contains('panels-min'));
+}
+
 function segKeys(seg) {
   seg.addEventListener('keydown', e => {
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
@@ -669,6 +686,7 @@ function bindKeys() {
     else if (k === 'h' || k === 'H') toggleHeatmap();
     else if (k === 's' || k === 'S') saveBaseline();
     else if (k === 'e' || k === 'E') openDialog('expMenu');
+    else if (k === 'm' || k === 'M') togglePanels();
     else if (k === '?') openDialog('helpDlg');
     else if (k >= '1' && k <= '4') setTimeScale(SPEEDS[+k - 1]);
     else if (k === 'Escape') { selectCar(null); hidePopover(); }
@@ -747,7 +765,10 @@ function bindUI(o = {}) {
   }
 
   bindBarToggle('ctlToggle', 'controls-open');
-  bindBarToggle('metricsToggle', 'metrics-open');
+  $('metricsToggle').addEventListener('click', togglePanels);
+  // Short desktop windows start minimised unless the user chose otherwise.
+  const pm = store.get('ts-panels-min');
+  setPanelsMin(pm === null ? window.innerHeight < 760 : pm === '1', false);
   bindChartHover('tsChart', v => { tsHover = v; });
   bindChartHover('fdChart', v => { fdHover = v; });
   bindKeys();

@@ -136,6 +136,10 @@ export function buildControls(opts) {
       if (document.body.classList.contains('is-mobile') && !document.body.classList.contains('controls-open')) {
         $('ctlToggle').click();
       }
+      // On desktop, picking a tab while the panels are minimised restores them.
+      if (!document.body.classList.contains('is-mobile') && document.body.classList.contains('panels-min')) {
+        $('metricsToggle').click();
+      }
     });
     tabs.append(tab);
     const panel = h('div', { class: 'panel', role: 'tabpanel', id: 'panel-' + g.id, 'aria-labelledby': 'tab-' + g.id });

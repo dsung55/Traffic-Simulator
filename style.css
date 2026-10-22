@@ -120,7 +120,7 @@
   .los.gC,.los.gD{color:#f5d77e;border-color:rgba(240,194,75,.45)}
   .los.gE,.los.gF{color:#ff9c92;border-color:rgba(243,106,95,.5)}
 
-  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(102px,1fr));gap:6px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(86px,1fr));gap:6px}
   .kpi{position:relative;display:flex;flex-direction:column;gap:1px;padding:6px 10px 6px;min-width:0;
     border-radius:var(--r-sm);background:var(--glass-2);border:1px solid var(--glass-border);cursor:help;
     transition:border-color .2s,background .2s}
@@ -199,6 +199,7 @@
   .ctl.disabled{opacity:.42}
   .ctl.disabled input,.ctl.disabled .toggle{cursor:not-allowed}
   .ctl .btnRow{display:flex;gap:6px;flex-wrap:wrap}
+  .ctl .seg{align-self:flex-start}
 
   .info{flex:none;width:17px;height:17px;padding:0;border-radius:50%;border:1px solid var(--border-2);
     background:transparent;color:var(--faint);font:italic 700 10.5px/15px Georgia,"Times New Roman",serif;
@@ -422,17 +423,34 @@
   .onActions{display:flex;gap:8px;margin-top:13px;flex-wrap:wrap}
 
   /* ── Mid-size desktops: charts drop below the KPI block ───────── */
+  @media (max-width:1380px){
+    .brandSub,.quick kbd{display:none}
+    .headRow{gap:8px}
+    .kLabel{letter-spacing:.4px;font-size:9px}
+    #sidebar{grid-template-columns:minmax(0,1fr) 250px 190px}
+    .kVal b{font-size:17px}
+  }
   @media (max-width:1180px){
-    #sidebar{grid-template-columns:minmax(0,1fr) 260px}
+    #sidebar{grid-template-columns:minmax(0,1fr) 250px}
     .fdCard{display:none}
+    .quick .btn span,#statusChip{display:none}
+    .kpis{grid-template-columns:repeat(auto-fit,minmax(78px,1fr))}
+    .kpi{padding:6px 8px}
   }
   @media (max-width:960px){
-    .brandSub{display:none}
-    .quick .btn span,.quick kbd{display:none}
+    .brandText{display:none}
+    .brand{padding-right:0;border-right:none}
   }
 
   /* ── Mobile layout (body.is-mobile from js/device.js) ─────────── */
-  .metricsToggle{display:none}
+  .is-desktop .metricsToggle{display:inline-flex}
+  .is-desktop .metricsToggle[aria-expanded=false]{border-color:var(--accent);background:var(--accent-soft);color:#cfe4ff}
+  .is-desktop.panels-min .chartCard,.is-desktop.panels-min .baseRow:not(:has(#baseInfo:not([hidden]))){display:none}
+  .is-desktop.panels-min #sidebar{grid-template-columns:1fr}
+  .is-desktop.panels-min #controls{display:none}
+  .is-desktop.panels-min #bottombar{padding-bottom:0}
+  .is-desktop.panels-min .tabs{border-bottom:none}
+  .is-desktop.panels-min .tab[aria-selected=true]::after{transform:scaleX(0)}
   .is-mobile #topbar{padding:8px 10px 9px;gap:8px;max-height:80vh}
   .is-mobile .headRow{gap:7px}
   .is-mobile .brand{order:0;border-right:none;padding-right:0;margin-right:auto}
