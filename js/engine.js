@@ -545,7 +545,11 @@ function mobilDesire(car, target) {
 function gapCheck(car, target, urgency) {
   // Never slide into the wreck: in a blocked lane the crashed vehicles occupy
   // [INCIDENT_CELL, INCIDENT_CELL + INCIDENT_SPAN] (what the renderer draws).
-  if (laneBlocked(target) && car.cell + (car.len || CAR_LEN) > INCIDENT_CELL - 0.5 &&
+  // A car already halted at the block in its OWN closed lane may still step
+  // sideways into the next closed lane (its nose is no nearer that wreck), so
+  // with 2+ lanes closed it can work its way across toward the open ones.
+  const margin = laneBlocked(car.lane) ? 0 : 0.5;
+  if (laneBlocked(target) && car.cell + (car.len || CAR_LEN) > INCIDENT_CELL - margin &&
       car.cell < INCIDENT_CELL + INCIDENT_SPAN + 0.5) return false;
   const ga = car.prof.gapAccept * Math.max(0.35, 1 - urgency);
   // Real gap acceptance is TIME-based: observed minimum accepted lead/lag gaps
@@ -578,9 +582,16 @@ function gapCheck(car, target, urgency) {
     // Physical guard, independent of urgency: the lag gap must exceed the
     // follower's EMERGENCY stopping distance for the speed it would have to
     // shed — no driver cuts in where contact is kinematically guaranteed.
-    const shed = Math.max(0, fol.foll.v - car.v);
+    // Escaping a closed lane close to the wreck, the merger keeps braking for
+    // it until its body is across (it cannot drive through it), so size the
+    // lag gap as if it will stop — otherwise the new follower runs into it.
+    // Likewise it keeps following a close leader in the lane it is leaving.
+    const nearWreck = laneBlocked(car.lane) && INCIDENT_CELL - car.cell - (car.len || CAR_LEN) < 3;
+    const own = car.lane < sim.lanes ? leaderInLane(car, car.lane, 3) : null;
+    const vMerge = nearWreck ? 0 : own && own.lead ? Math.min(car.v, own.leadV) : car.v;
+    const shed = Math.max(0, fol.foll.v - vMerge);
     const needBehind = Math.max(floor,
-      shed * shed / (2 * B_SAFE * 2) + 0.2,
+      shed * shed / (2 * 2 * B_SAFE * weatherParams().brakeMul) + 0.2,
       (0.6 + 0.3 * fol.foll.v + 1.0 * shed) * ga);
     if (fol.gap < needBehind) return false;
     // Hard safety: the new follower must not be forced into harsh braking.
@@ -669,6 +680,10 @@ function beginExecute(car) {
   car.lane = lc.target;
   car.laneFrom = car.laneCoord;   // slide starts from where the body actually is
   car.laneTo = lc.target;
+  // A forced merge at crawl speed (zipper at a lane closure or gore) is a
+  // short, steep move — cars nose across in ≈2.5 s rather than drifting over
+  // for 4.5 s while blocking both lanes.
+  car.lcDur = lc.forced ? LANE_CHANGE_TIME - 2 * Math.max(0, 1 - car.v / 2) : LANE_CHANGE_TIME;
   car.laneT = 0;
   sim.evLaneChanges.push(sim.time);
 }
@@ -852,6 +867,11 @@ function yieldPass() {
     // Already alongside (bumper gap gone): no point braking — drive on past
     // and let the merger slot in behind instead.
     if (fol.gap < 0.2) continue;
+    // Both at a standstill with less room than any merge needs: the follower
+    // cannot back up to open the pocket, so holding still would deadlock the
+    // pair (e.g. a queue at a lane closure). It moves up past the merger
+    // instead, which then slots in behind it.
+    if (fol.foll.v < 0.1 && car.v < 0.1 && fol.gap < MERGE_MARGIN * 0.5) continue;
     if (lc.forced) {
       // Zipper: brake to open room for the merger. Urgency (set by the merger's
       // proximity to its wall/gore) scales how firmly the follower lifts off.
@@ -870,14 +890,15 @@ function yieldPass() {
 function advanceLaneAnim(dt) {
   for (const car of sim.cars) {
     if (car.laneT < 1) {
-      car.laneT = Math.min(1, car.laneT + dt / LANE_CHANGE_TIME);
+      const dur = car.lcDur || LANE_CHANGE_TIME;
+      car.laneT = Math.min(1, car.laneT + dt / dur);
       const t = car.laneT;
       // Smoothstep for a natural ease-in/out across the line.
       const e = t * t * (3 - 2 * t);
       car.laneCoord = car.laneFrom + (car.laneTo - car.laneFrom) * e;
       // Visible steering: yaw the body with the lateral velocity, which peaks
       // mid-manoeuvre (smoothstep derivative 6t(1−t)) and straightens out.
-      const latV = (car.laneTo - car.laneFrom) * 6 * t * (1 - t) / LANE_CHANGE_TIME;
+      const latV = (car.laneTo - car.laneFrom) * 6 * t * (1 - t) / dur;
       car.tilt = Math.max(-0.20, Math.min(0.20, latV * 0.34));
       // Mostly across: release the lane being left for trailing traffic.
       if (car.laneT >= 0.55 && car.lane2 != null) car.lane2 = null;
@@ -1540,9 +1561,9 @@ function resetSim() {
 //     the new emptier lane over the next seconds via MOBIL (path of least
 //     resistance). New left-edge arrivals may use any lane.
 //   • Decreasing: relocate any car now in a vanished lane (index ≥ n) into the
-//     nearest still-valid lane, picking a safe gap when one exists; otherwise it
-//     is dropped onto the edge lane and merges as soon as IDM/MOBIL allow (it
-//     will simply slot in — no hard delete). The ramp/accel lane follows
+//     nearest still-valid lane, picking a safe gap when one exists; a car with
+//     no pocket in any lane leaves the strip (it would otherwise be dropped on
+//     top of another vehicle). The ramp/accel lane follows
 //     sim.lanes automatically (rampLaneIdx === sim.lanes).
 function applyLaneCount(n) {
   const opts = cfg().laneOptions;
@@ -1561,15 +1582,28 @@ function applyLaneCount(n) {
       let placed = -1;
       for (let t = n - 1; t >= 0; t--) {
         const probe = { lane: car.lane, cell: car.cell, len: car.len };
-        const aheadGap = leaderInLane({ ...probe, v: car.v }, t, N).gap;
-        const behindGap = followerInLane({ ...probe }, t, N).gap;
-        if (aheadGap > 0.2 && behindGap > 0.2) { placed = t; break; }
+        // The pocket must be stoppable, not merely unoccupied: whoever is
+        // closing in (the relocated car on its new leader, or the new
+        // follower on it) must be able to shed the speed difference within
+        // the gap at emergency braking.
+        const ahead = leaderInLane({ ...probe, v: car.v }, t, N);
+        const behind = followerInLane({ ...probe }, t, N);
+        const stopGap = dv => 0.2 + Math.max(0, dv) ** 2 / (2 * 2 * B_SAFE * weatherParams().brakeMul);
+        if (ahead.gap > stopGap(car.v - (ahead.lead ? ahead.leadV : car.v)) &&
+            behind.gap > stopGap(behind.foll ? behind.foll.v - car.v : 0)) { placed = t; break; }
       }
-      if (placed < 0) placed = n - 1;    // no safe gap: drop onto edge lane, IDM sorts it out
+      // No pocket anywhere: the driver takes an exit off-screen rather than
+      // being dropped on top of another vehicle.
+      if (placed < 0) { car.gone = true; continue; }
       car.lane = placed;
       car.laneFrom = car.laneTo = car.laneCoord = placed;
       car.laneT = 1;
     }
+  }
+
+  if (sim.cars.some(c => c.gone)) {
+    if (sim.selected && sim.selected.gone) hooks.selectCar(null);
+    sim.cars = sim.cars.filter(c => !c.gone);
   }
 
   // Lane indices (and the ramp-lane index) just shifted under any in-flight
