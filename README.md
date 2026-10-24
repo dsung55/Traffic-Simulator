@@ -45,9 +45,14 @@ that don't apply to the current layout are hidden, and the tab says so.
 
 **Metrics:** a plain-language verdict (free flow, near capacity, breakdown,
 spillback…), the Highway Capacity Manual **Level of Service** (A–F; density
-for freeways, control delay per signal for the arterial), and tiles for average
-speed, flow (veh/h/lane), density (veh/mi/lane), travel time, delay per
-vehicle, stops per vehicle and the ramp / entry queues. Two charts show speed
+for freeways, control delay per signal for the arterial, and F whenever demand
+exceeds capacity and a queue builds upstream), and tiles for average speed,
+flow (veh/h/lane), density (veh/mi/lane), travel time, delay per vehicle, stops
+per vehicle, the ramp queue, the queue wait and the entry queue. Travel time
+is measured on the road, from entering it to leaving; time spent waiting to
+get on (upstream when demand exceeds what the road takes, or at the ramp
+meter) is reported separately as **Queue wait**, so a fix that speeds up the
+road by holding cars back shows both sides. Two charts show speed
 and flow over the last few minutes, and flow vs density (the *fundamental
 diagram*). Hover a chart to read values, and hover or tap a tile for its
 definition.
@@ -76,33 +81,41 @@ driver brake.
 
 The core loop is **observe → save a baseline → change one thing → compare**.
 
-1. Let traffic settle for a minute or two (fast-forward with <kbd>4</kbd>).
+1. Let traffic settle for two to three minutes (fast-forward with <kbd>4</kbd>).
+   Trip statistics cover the last two minutes of completed trips, so they need
+   that long to reflect the current settings.
 2. Press **Save baseline** (<kbd>S</kbd>). This snapshots the last minute of
    metrics and all settings.
 3. Change **one** factor. The metrics bar lists what changed since the
    baseline (for example "Ramp meter Off → On").
 4. Wait for traffic to respond (the bar shows "settling…" for the first
-   minute), then read the deltas: **green = better, red = worse**, with the
-   right direction per metric (higher speed and flow are better; longer travel
-   time, more delay, stops and queues are worse; density is neutral). The
-   summary line states the bottom line in words, e.g. "Trips are 18% faster
-   than the baseline".
+   minute; give it two or three), then read the deltas: **green = better,
+   red = worse**, with the right direction per metric (higher speed and flow
+   are better; longer travel time, more delay, stops, queues and waits are
+   worse; density is neutral). The summary line weighs travel time on the road
+   against the queues to get on, e.g. "Trips on the road are 9% faster than
+   the baseline, but 40 more vehicles are now waiting to get on. A trade-off,
+   not a free win."
 
 ### Experiments
 
 **Experiments** sets these up for you. Each one configures a situation, tells
 you what to watch and why it happens, warms up, then runs the A/B step and
-reports the metrics that matter for it.
+reports the metrics that matter for it. Every experiment is also run headlessly
+in `test/experiments.test.js` (same warm-up, baseline, change and settling time,
+several seeds), which checks that its metrics move the way its explanation
+says. Single runs are random, so incident experiments in particular can
+occasionally buck the trend.
 
 | Experiment | What it teaches |
 | --- | --- |
 | Phantom traffic jam | Near capacity, one hard brake becomes a jam that travels upstream. Quicker reactions damp it. |
-| Ramp metering at rush hour | Metering keeps the merge below capacity: a faster mainline, paid for with a ramp queue. |
-| Early merge vs zipper merge | A longer merge lane lets drivers match speed and alternate, with less braking. |
-| Rubbernecking at an incident | Gawking drivers cut the capacity of the open lanes, not only the blocked one. |
+| Ramp metering: who pays? | A meter moves the queue onto the ramp: ramp waits grow a lot, while the mainline gains a little at best unless the merge was breaking down. |
+| More green for the main street | Signal capacity ≈ saturation flow × green share: more green cuts delay and stops sharply. |
+| Rubbernecking at an incident | Gawking drivers slow the open lanes too; stopping it restores speed past the scene. |
 | Rain and heavy trucks | Longer gaps and big vehicles reduce capacity, so the same demand can tip into congestion. |
-| Automated vehicles vs stop-and-go | AVs react instantly and keep steady gaps, absorbing waves instead of amplifying them. |
-| Speed harmonization | Lowering the upstream limit near a bottleneck smooths arrivals and cuts stop-and-go. |
+| Automated vehicles vs stop-and-go | AVs react instantly and keep steady gaps, absorbing waves: throughput and speed rise. |
+| Speed harmonization | A lower upstream limit near a bottleneck means much less hard braking, but on a short road it does not make trips faster. |
 | Green wave | Coordinated signal offsets let platoons pass light after light without stopping. |
 
 ### Things worth knowing
