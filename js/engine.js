@@ -765,7 +765,13 @@ function laneChangeStep() {
       continue;
     }
 
-    if (car.cool > 0) { car.cool -= 1; continue; }
+    // The settle-in pause after a lane change never delays escaping a closed
+    // lane (e.g. a ramp merger that has just landed in the blocked right lane):
+    // waiting it out left such cars stopped at the wreck, dragging the open
+    // lane down with a merge from standstill.
+    const escaping = laneBlocked(car.lane) && car.lane > 0 &&
+      INCIDENT_CELL - car.cell >= 0 && INCIDENT_CELL - car.cell < 40;
+    if (car.cool > 0) { car.cool -= 1; if (!escaping) continue; }
     // Eyes off the road: no new manoeuvres during an attention lapse.
     if (car.distracted) continue;
 

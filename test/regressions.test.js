@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tick, applyLaneCount } from '../js/engine.js';
 import { sim } from '../js/state.js';
-import { resetWorld } from './helpers.js';
+import { resetWorld, placeCar } from './helpers.js';
 
 const MIX = { pctTrucks: 16, pctAgg: 3, pctPas: 15, pctAV: 30, reactionTime: 0 };
 
@@ -61,4 +61,17 @@ test('removing lanes never stacks vehicles on top of each other', () => {
       assert.deepEqual(overlaps(), [], `seed ${seed}: overlap ${i + 1} s after the change`);
     }
   }
+});
+
+test('a car that has just landed in a closed lane starts escaping at once', () => {
+  // e.g. a ramp merger whose target (right) lane is closed ahead: the usual
+  // settle-in pause after a lane change must not leave it to stop at the wreck.
+  resetWorld({ incident: true, incidentLanes: 1 }, 7);
+  const car = placeCar({ lane: 2, cell: 20, v: 3 });
+  car.cool = 8;
+  tick();
+  assert.ok(car.lc && car.lc.target === 1, 'signals toward the open lane on the first tick');
+  for (let i = 0; i < 12 && car.lane === 2; i++) tick();
+  assert.equal(car.lane, 1, 'merged out before reaching the block');
+  assert.ok(car.v > 1, `still moving (${car.v.toFixed(2)} cells/s)`);
 });

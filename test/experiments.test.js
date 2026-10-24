@@ -65,7 +65,10 @@ for (const e of EXPERIMENTS) {
     for (const [k, dir] of Object.entries(e.expect)) {
       const rel = trials.map(t => (t[k].b - t[k].a) / Math.max(Math.abs(t[k].a), 1e-6));
       const desc = trials.map(t => `${t[k].a.toFixed(2)}→${t[k].b.toFixed(2)}`).join(', ');
-      const avg = rel.reduce((x, y) => x + y, 0) / rel.length;
+      // Pooled change (mean after vs mean before) so one run with a tiny
+      // baseline cannot dominate; plus a per-run majority check below.
+      const sa = trials.reduce((x, t) => x + t[k].a, 0), sb = trials.reduce((x, t) => x + t[k].b, 0);
+      const avg = (sb - sa) / Math.max(Math.abs(sa), 1e-6);
       if (dir === 'noRise') {
         assert.ok(avg < 0.03, `${e.id}: ${k} should not rise (mean ${(avg * 100).toFixed(0)}%: ${desc})`);
       } else if (dir === 'noDrop') {
