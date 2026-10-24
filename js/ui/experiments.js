@@ -82,7 +82,7 @@ export const EXPERIMENTS = [
     focus: ['flowVphPerLane', 'avgSpeedMph'],
     expect: { flowVphPerLane: +1, avgSpeedMph: +1 },
     watch: 'Slow and distracted drivers create stop-and-go waves and more traffic arrives than the road can take. Add 40% automated vehicles and watch the heat map: waves weaken as AVs absorb them.',
-    why: 'AVs react instantly and keep steady, shorter gaps, so they don’t amplify disturbances and the same lanes carry more vehicles per hour. Note that the road now holds more cars, so trip times on it need not fall: the gain is throughput, with a shorter queue to get on.',
+    why: 'AVs react instantly and keep steady, shorter gaps, so they don’t amplify disturbances and the same lanes carry more vehicles per hour. The gain shows up as throughput and speed. Trip times on the road need not fall (it now holds more cars), and at this demand more traffic still arrives than even the improved road can carry, so a queue still builds upstream.',
     steps: [{ label: 'Save baseline, add 40% automated vehicles', apply: { pctAV: 40 }, baseline: true }],
   },
   {
@@ -93,7 +93,7 @@ export const EXPERIMENTS = [
     focus: ['hardBrakePct', 'meanTravelTimeS'],
     expect: { hardBrakePct: -1, meanTravelTimeS: 'noDrop' },
     watch: 'Drivers race up to the incident queue and brake hard. Turn on the variable speed limit and watch the upstream limit drop as the queue forms.',
-    why: 'Lower upstream speeds mean drivers reach the back of the queue gently: far less hard braking and smaller speed differences, which is mainly a safety benefit (fewer rear-end crashes). It does not make trips faster here: on a short road the lower limit usually costs some time. Long corridors can gain a little throughput by delaying breakdown.',
+    why: 'Lower upstream speeds mean drivers reach the back of the queue gently: far less hard braking and smaller speed differences, which is mainly a safety benefit (fewer rear-end crashes). It does not make trips faster here: on a short road the lower limit usually costs some time. Long corridors can gain a little throughput by delaying breakdown. Incident traffic is noisy, so one run can buck the trend: repeat it to see the pattern.',
     steps: [{ label: 'Save baseline, turn on the variable speed limit', apply: { vslOn: true }, baseline: true }],
   },
   {

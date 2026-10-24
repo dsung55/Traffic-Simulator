@@ -290,12 +290,14 @@ function deltaFor(m, cur, base) {
   // Queues and waits often start near zero: show absolute changes for them,
   // and ignore wobbles smaller than a few vehicles / seconds.
   const queue = ['rampQueue', 'entryQueue', 'meanWaitS', 'meanRampWaitS'].includes(m.key);
-  const floor = m.key === 'stopsPerVeh' ? 0.25 : m.key === 'hardBrakePct' ? 0.5 : queue ? (m.unit === 's' ? 5 : 3) : 1e-6;
+  const floor = m.key === 'stopsPerVeh' ? 0.25 : m.key === 'hardBrakePct' ? 0.5
+    : m.key === 'meanDelayS' ? 2 : queue ? (m.unit === 's' ? 5 : 3) : 1e-6;
   const scale = Math.max(Math.abs(base), floor);
   const rel = diff / scale;
   if (Math.abs(rel) < 0.03) return { text: '≈ same', cls: 'same' };
   const arrow = diff > 0 ? '▲' : '▼';
-  const txt = Math.abs(base) > 1e-6 && !queue
+  const small = m.key === 'meanDelayS' && Math.abs(base) < 5;   // % of ~0 s is meaningless
+  const txt = Math.abs(base) > 1e-6 && !queue && !small
     ? `${arrow} ${Math.round(Math.abs(diff / base) * 100)}%`
     : `${arrow} ${fmt(Math.abs(diff), Math.abs(diff) < 10 ? 1 : 0)}`;
   const cls = !m.better ? 'neutral' : (diff * m.better > 0 ? 'better' : 'worse');
@@ -316,28 +318,29 @@ function compareSentence(cur, base) {
   // only reported once a vehicle finally gets on, so they lag a change.
   const q0 = queued(base), q1 = queued(cur), dq = q1 - q0;
   const qBig = Math.abs(dq) >= Math.max(5, 0.3 * q0);
-  const qTxt = !qBig ? '' : dq > 0
-    ? `, but ${Math.round(dq)} more vehicles are now waiting to get on (${Math.round(q0)} → ${Math.round(q1)})`
-    : `, and ${Math.round(-dq)} fewer vehicles are waiting to get on (${Math.round(q0)} → ${Math.round(q1)})`;
+  const qLvl = !qBig ? 0 : dq < 0 ? 1 : -1;
+  // "but" when the queue moves against the headline, "and" when it agrees.
+  const qTxt = lvl => !qBig ? '' : (lvl && lvl !== qLvl ? ', but ' : ', and ') + (dq > 0
+    ? `${Math.round(dq)} more vehicles are now waiting to get on (${Math.round(q0)} → ${Math.round(q1)})`
+    : `${Math.round(-dq)} fewer vehicles are waiting to get on (${Math.round(q0)} → ${Math.round(q1)})`);
   const tt0 = base.meanTravelTimeS, tt1 = cur.meanTravelTimeS;
   if (Number.isFinite(tt0) && Number.isFinite(tt1) && tt0 > 0) {
     const d = (tt1 - tt0) / tt0;
     const tLvl = Math.abs(d) < 0.03 ? 0 : d < 0 ? 1 : -1;
-    const qLvl = !qBig ? 0 : dq < 0 ? 1 : -1;
     const level = tLvl + qLvl > 0 && tLvl >= 0 && qLvl >= 0 ? 'better'
       : tLvl + qLvl < 0 && tLvl <= 0 && qLvl <= 0 ? 'worse' : 'same';
     const head = tLvl === 0
       ? `Trips on the road take about the same time as the baseline (${tt0.toFixed(0)} s)`
       : `Trips on the road are ${Math.round(Math.abs(d) * 100)}% ${d < 0 ? 'faster' : 'slower'} than the baseline (${tt0.toFixed(0)} s → ${tt1.toFixed(0)} s)`;
     const trade = tLvl !== 0 && qLvl !== 0 && tLvl !== qLvl ? ' A trade-off, not a free win.' : '';
-    return { level, text: head + qTxt + '.' + trade };
+    return { level, text: head + qTxt(tLvl) + '.' + trade };
   }
   const v0 = base.avgSpeedMph, v1 = cur.avgSpeedMph;
   if (Number.isFinite(v0) && Number.isFinite(v1) && v0 > 0) {
     const d = (v1 - v0) / v0;
-    if (Math.abs(d) < 0.03) return { level: 'same', text: `Average speed is about the same as the baseline (${v0.toFixed(0)} mph)${qTxt}.` };
+    if (Math.abs(d) < 0.03) return { level: 'same', text: `Average speed is about the same as the baseline (${v0.toFixed(0)} mph)${qTxt(0)}.` };
     return { level: d > 0 ? 'better' : 'worse',
-      text: `Average speed is ${Math.round(Math.abs(d) * 100)}% ${d > 0 ? 'higher' : 'lower'} than the baseline (${v0.toFixed(0)} → ${v1.toFixed(0)} mph)${qTxt}.` };
+      text: `Average speed is ${Math.round(Math.abs(d) * 100)}% ${d > 0 ? 'higher' : 'lower'} than the baseline (${v0.toFixed(0)} → ${v1.toFixed(0)} mph)${qTxt(d > 0 ? 1 : -1)}.` };
   }
   return { level: 'same', text: 'Collecting data to compare…' };
 }

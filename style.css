@@ -121,15 +121,15 @@
   .los.gE,.los.gF{color:#ff9c92;border-color:rgba(243,106,95,.5)}
 
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(86px,1fr));gap:6px}
-  .kpi{position:relative;display:flex;flex-direction:column;gap:1px;padding:6px 10px 6px;min-width:0;
+  .kpi{position:relative;display:flex;flex-direction:column;gap:1px;padding:6px 8px 6px;min-width:0;
     border-radius:var(--r-sm);background:var(--glass-2);border:1px solid var(--glass-border);cursor:help;
     transition:border-color .2s,background .2s}
   .kpi:hover{border-color:rgba(150,164,198,.38);background:var(--glass-3)}
-  .kLabel{font-size:9.5px;font-weight:650;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;
+  .kLabel{font-size:9.5px;font-weight:650;color:var(--dim);text-transform:uppercase;letter-spacing:.3px;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .kVal{display:flex;align-items:baseline;gap:4px;white-space:nowrap}
+  .kVal{display:flex;align-items:baseline;gap:4px;white-space:nowrap;min-width:0}
   .kVal b{font-size:19px;font-weight:700;line-height:1.15;font-variant-numeric:tabular-nums}
-  .kVal small{font-size:10px;color:var(--faint);font-weight:550}
+  .kVal small{font-size:10px;color:var(--faint);font-weight:550;overflow:hidden;text-overflow:ellipsis;min-width:0}
   .kDelta{min-height:15px;font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--faint);
     transition:color .3s,opacity .3s}
   .kDelta.better{color:var(--good)}
@@ -426,7 +426,8 @@
   @media (max-width:1380px){
     .brandSub,.quick kbd{display:none}
     .headRow{gap:8px}
-    .kLabel{letter-spacing:.4px;font-size:9px}
+    .kLabel{letter-spacing:.2px;font-size:9px}
+    .kpis{grid-template-columns:repeat(auto-fit,minmax(76px,1fr))}
     #sidebar{grid-template-columns:minmax(0,1fr) 250px 190px}
     .kVal b{font-size:17px}
   }
