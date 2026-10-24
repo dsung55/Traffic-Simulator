@@ -251,8 +251,8 @@ function buildKpis() {
     return {
       title: 'Level of Service (LOS)',
       what: city
-        ? 'The Highway Capacity Manual grade for signalised streets, from average control delay per vehicle at each signal: A ≤ 10 s, B ≤ 20, C ≤ 35, D ≤ 55, E ≤ 80, F above.'
-        : 'The Highway Capacity Manual grade for freeways, from density: A ≤ 11 veh/mi/lane, B ≤ 18, C ≤ 26, D ≤ 35, E ≤ 45, F above (breakdown).',
+        ? 'The Highway Capacity Manual grade for signalised streets, from average control delay per vehicle at each signal: A ≤ 10 s, B ≤ 20, C ≤ 35, D ≤ 55, E ≤ 80, F above, or whenever demand exceeds capacity and a queue builds upstream.'
+        : 'The Highway Capacity Manual grade for freeways, from density: A ≤ 11 veh/mi/lane, B ≤ 18, C ≤ 26, D ≤ 35, E ≤ 45, F above (breakdown), or whenever demand exceeds capacity and a queue builds upstream.',
       why: 'Engineers design roads to reach about LOS C–D at peak hour. E means running at capacity; F means demand exceeds it and queues form.',
     };
   });
@@ -588,10 +588,12 @@ function updateInspector() {
   if (!sim.cars.includes(car)) { selectCar(null); return; }
   const toMph = v => v * MPH_PER_CELL;
   $('insName').textContent = `${vehLabel(car)} #${car.id}`;
-  $('insProf').textContent = car.isAV ? 'Automated driving' : `${car.profName} driver`;
+  // Same names as the driver-mix sliders ("passive" is shown as cautious).
+  const prof = ({ aggressive: 'aggressive', passive: 'cautious', normal: 'normal' })[car.profName] || car.profName;
+  $('insProf').textContent = car.isAV ? 'Automated driving' : `${prof} driver`;
   const chips = [];
   chips.push(car.isAV ? '<span class="ichip av">Automated</span>' : '<span class="ichip">Human</span>');
-  if (!car.isAV) chips.push(`<span class="ichip p-${car.profName}">${car.profName}</span>`);
+  if (!car.isAV) chips.push(`<span class="ichip p-${car.profName}">${prof}</span>`);
   if (car.isTruck) chips.push('<span class="ichip">Heavy vehicle</span>');
   if (car.distracted) chips.push('<span class="ichip warn">On phone</span>');
   if (car.exiting) chips.push('<span class="ichip">Exiting</span>');

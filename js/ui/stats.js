@@ -108,6 +108,11 @@ export function speedRatio() {
 // Highway Capacity Manual Level of Service. Freeways are graded by density
 // (pc/mi/ln), signalised arterials by control delay per vehicle per signal.
 export function levelOfService(stats) {
+  // HCM: demand above capacity is LOS F whatever the density or delay of the
+  // vehicles that made it in (their queue wait upstream is not in either).
+  if (Number.isFinite(stats.entryQueue) && stats.entryQueue >= 15) {
+    return { grade: 'F', basis: `demand exceeds capacity: ${Math.round(stats.entryQueue)} vehicles queued upstream` };
+  }
   if (cfg().lightCells) {
     const per = stats.meanDelayS / cfg().lightCells.length;
     if (!Number.isFinite(per)) return null;
