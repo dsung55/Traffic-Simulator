@@ -8,16 +8,21 @@ import { PROFILES, TRUCK_OVERRIDE, CAR_LEN, TRUCK_LEN } from '../js/config.js';
 
 // Reset the singleton sim to a clean, seeded, fully-known state. `overrides`
 // are applied on top of the defaults below (e.g. { scenario: 'city', lanes: 1 }).
-// targetCars: 0 by default so tests control the fleet; raise it to exercise
-// spawning. Returns sim for convenience.
+// demandVph / rampDemandVph: 0 by default so tests control the fleet; raise
+// them to exercise spawning. Returns sim for convenience.
 export function resetWorld(overrides = {}, seed = 1) {
   seedRng(seed);
   Object.assign(sim, {
     scenario: 'highway', lanes: 3, speedMph: 65, targetCars: 0,
-    pctTrucks: 0, pctAgg: 0, pctPas: 0,
+    demandVph: 0, rampDemandVph: 0,
+    pctTrucks: 0, pctAgg: 0, pctPas: 0, pctAV: 0, pctDistracted: 0,
+    reactionTime: 0.8,
     meterOn: false, meterInterval: 8, mergeShape: 'taper',
-    incident: false, exitRamp: false, exitPct: 20,
-    weather: 'clear', cycleLen: 60, greenWave: false, paused: false,
+    incident: false, incidentLanes: 1, rubbernecking: true,
+    truckLaneRestriction: false, vslOn: false,
+    exitRamp: false, exitPct: 20,
+    weather: 'clear', cycleLen: 60, greenWave: false, greenSplit: 0.5,
+    timeScale: 1, paused: false,
     nextId: 1,
   }, overrides);
   resetSim();
