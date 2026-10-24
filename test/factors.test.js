@@ -37,7 +37,7 @@ test('getStats returns every contract field as a number', () => {
   resetWorld({ demandVph: 1200, rampDemandVph: 500, vslOn: true });
   const keys = ['avgSpeedMph', 'flowVphPerLane', 'densityVpmPerLane', 'meanTravelTimeS',
     'meanDelayS', 'stopsPerVeh', 'vehOnRoad', 'laneChangesPerMin', 'rampQueue', 'throughputPerMin',
-    'entryQueue', 'meanEntryWaitS', 'meanRampWaitS', 'vslMph'];
+    'entryQueue', 'meanEntryWaitS', 'meanRampWaitS', 'vslMph', 'meanWaitS', 'meanTotalTimeS', 'hardBrakePct'];
   const s0 = getStats();
   for (const k of keys) assert.equal(typeof s0[k], 'number', `${k} at t=0`);
   assert.ok(Number.isNaN(s0.meanTravelTimeS), 'unknown before any trip completes');
@@ -47,6 +47,7 @@ test('getStats returns every contract field as a number', () => {
   assert.ok(s.avgSpeedMph > 40 && s.avgSpeedMph < 80);
   assert.ok(s.meanTravelTimeS > 15 && s.meanTravelTimeS < 60, `travel ${s.meanTravelTimeS}`);
   assert.ok(s.meanDelayS >= 0 && s.meanDelayS < s.meanTravelTimeS);
+  assert.ok(s.meanTotalTimeS >= s.meanTravelTimeS - 1e-9, 'total time includes the queue wait');
   assert.equal(s.vehOnRoad, sim.cars.length);
   assert.ok(Array.isArray(sim.evTravel) && sim.evTravel.every(e => 'travel' in e && 'delay' in e && 't' in e));
   assert.ok(sim.vslZone && sim.vslZone.end > sim.vslZone.start, 'vslZone set while VSL is on');

@@ -1172,10 +1172,16 @@ function recordEntry(car) {
 }
 
 // Rolling sample of the road state for windowed speed/density statistics.
+// `hb` counts mainline vehicles braking harder than 2 m/s² (0.27 cells/s²)
+// over the last second — the abrupt braking that stop-and-go waves, late
+// reactions and speed differences produce.
 function sampleStats() {
-  let sumV = 0, nMain = 0;
-  for (const c of sim.cars) { sumV += c.v; if (c.lane < sim.lanes) nMain++; }
-  sim.statSamples.push({ t: sim.time, sumV, n: sim.cars.length, nMain });
+  let sumV = 0, nMain = 0, hb = 0;
+  for (const c of sim.cars) {
+    sumV += c.v;
+    if (c.lane < sim.lanes) { nMain++; if (c.accel < -0.27) hb++; }
+  }
+  sim.statSamples.push({ t: sim.time, sumV, n: sim.cars.length, nMain, hb });
 }
 
 // Headline indicators for the UI (all numbers; NaN when not yet measurable).
@@ -1184,10 +1190,13 @@ function sampleStats() {
 //   densityVpmPerLane  mainline vehicles per mile per lane, last 30 s
 //   meanTravelTimeS / meanDelayS / stopsPerVeh   completed trips, last 120 s
 //                      (timed from entering the road — queue waits excluded)
-//   meanEntryWaitS     mean wait in the left-edge entry queue, vehicles that
-//                      entered in the last 120 s (0 when nothing queues)
-//   meanRampWaitS      mean wait at the on-ramp (meter) before entering the
-//                      acceleration lane, last 120 s (NaN without a ramp)
+//   meanEntryWaitS     mean wait in the left-edge entry queue: vehicles that
+//                      entered in the last 120 s plus those still queued
+//   meanRampWaitS      same at the on-ramp (meter) before entering the
+//                      acceleration lane (NaN without a ramp)
+//   hardBrakePct       % of mainline vehicle-time spent braking harder than 2 m/s², last 30 s
+//   meanWaitS          mean wait before entering, all entries (left edge + ramp), last 120 s
+//   meanTotalTimeS     completed trips, last 120 s: queue wait + travel time
 //   vehOnRoad          vehicles currently on the strip
 //   laneChangesPerMin  lane changes begun, last 60 s
 //   rampQueue          vehicles waiting at the on-ramp meter
@@ -1198,12 +1207,17 @@ function getStats() {
   const now = sim.time;
   const w60 = Math.min(60, now), w30 = 30;
   const recent = sim.statSamples.filter(s => s.t > now - w30);
-  let sumV = 0, n = 0, nMain = 0;
-  for (const s of recent) { sumV += s.sumV; n += s.n; nMain += s.nMain; }
+  let sumV = 0, n = 0, nMain = 0, hb = 0;
+  for (const s of recent) { sumV += s.sumV; n += s.n; nMain += s.nMain; hb += s.hb || 0; }
   const trips = sim.evTravel.filter(e => e.t > now - 120);
   const mean = (arr, k) => arr.length ? arr.reduce((a, e) => a + e[k], 0) / arr.length : NaN;
   const per60 = cnt => (w60 >= 5 ? cnt * 60 / w60 : NaN);
+  // Waits: vehicles that got on in the last 120 s, PLUS those still waiting
+  // (their wait so far) — otherwise a growing or stalled queue would report
+  // only the older, shorter waits of the few that made it on.
   const waits = sim.evEntryWait.filter(e => e.t > now - 120);
+  for (const q of sim.entryQueues) for (const c of q) waits.push({ wait: Math.max(0, now - c.arriveTime), ramp: false });
+  for (const t of sim.rampQueueTimes) waits.push({ wait: Math.max(0, now - t), ramp: true });
   const mainW = waits.filter(e => !e.ramp), rampW = waits.filter(e => e.ramp);
   return {
     avgSpeedMph: n ? (sumV / n) * MPH_PER_CELL : NaN,
@@ -1220,6 +1234,9 @@ function getStats() {
     entryQueue: sim.entryQueue,
     meanEntryWaitS: mean(mainW, 'wait'),
     meanRampWaitS: cfg().hasRamp ? mean(rampW, 'wait') : NaN,
+    meanWaitS: mean(waits, 'wait'),
+    hardBrakePct: nMain ? 100 * hb / nMain : NaN,
+    meanTotalTimeS: trips.length ? trips.reduce((a, e) => a + e.travel + (e.wait || 0), 0) / trips.length : NaN,
     vslMph: sim.vslZone ? sim.vslMph : NaN,
   };
 }

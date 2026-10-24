@@ -193,7 +193,7 @@ function toggleHeatmap() { setSim('showHeatmap', !sim.showHeatmap, { quiet: true
 //──────────────────────────── metrics + baseline ────────────────────────────
 const METRICS = [
   { key: 'avgSpeedMph', label: 'Avg speed', unit: 'mph', d: 0, better: 1, primary: true,
-    what: 'Mean speed of the vehicles on the mainline right now.',
+    what: 'Mean speed of the vehicles on the road over the last 30 s.',
     why: 'The gap between this and the speed limit is congestion. It is what drivers feel first.' },
   { key: 'flowVphPerLane', label: 'Flow', unit: 'veh/h/ln', d: 0, better: 1, primary: true,
     what: 'Vehicles per hour per lane passing the detector (rolling window).',
@@ -202,8 +202,8 @@ const METRICS = [
     what: 'Vehicles per mile per lane on the mainline.',
     why: 'Below a critical density (~30–45 veh/mi/lane) traffic flows freely; above it speeds collapse. Freeway Level of Service A–F is graded on density.' },
   { key: 'meanTravelTimeS', label: 'Travel time', unit: 's', d: 0, better: -1, primary: true,
-    what: 'Average time to drive the whole section, for vehicles that finished in the last ~2 minutes.',
-    why: 'The bottom line for drivers. Comparing it before/after a change is the fairest single verdict.' },
+    what: 'Average time on the road to drive the whole section, for vehicles that finished in the last ~2 minutes. Time spent waiting to get on is shown separately under Queue wait.',
+    why: 'What drivers feel once they are moving. A change can shorten it by holding vehicles back, so always check the queues too: the baseline comparison does.' },
   { key: 'meanDelayS', label: 'Delay / veh', unit: 's', d: 0, better: -1,
     what: 'Extra time per trip compared with driving the section at the driver’s own desired speed.',
     why: 'Delay is the standard measure of congestion cost; the Highway Capacity Manual grades signalised intersections on it.' },
@@ -213,6 +213,11 @@ const METRICS = [
   { key: 'rampQueue', label: 'Ramp queue', unit: 'veh', d: 0, better: -1, scenario: 'highway',
     what: 'Vehicles waiting on the on-ramp to merge or for the meter.',
     why: 'Ramp metering deliberately trades a longer ramp queue for a faster mainline. If it grows without limit it would spill onto local streets.' },
+  { key: 'meanWaitS', label: 'Queue wait', unit: 's', d: 0, better: -1,
+    what: 'Average time vehicles waited to get onto the road, in the upstream entry queue or at the on-ramp / meter: those that got on in the last ~2 minutes plus those still waiting.',
+    why: 'Some fixes (like ramp metering) speed up the road by holding cars back. This is that hidden cost. It responds slowly: right after a change it still reflects the old queue.' },
+  { key: 'meanRampWaitS', label: 'Ramp wait', unit: 's', d: 0, better: -1, scenario: 'highway', tile: false },
+  { key: 'hardBrakePct', label: 'Hard braking', unit: '% of time', d: 1, better: -1, tile: false },
   { key: 'entryQueue', label: 'Entry queue', unit: 'veh', d: 0, better: -1,
     what: 'Vehicles that have arrived upstream but cannot enter the section yet because there is no room.',
     why: 'This is spillback: demand exceeds what the road can absorb, so the queue extends beyond what you see. Real jams grow the same way, backwards into earlier junctions.' },
@@ -223,6 +228,7 @@ let baseline = null;   // { stats, settings, t }
 function buildKpis() {
   const wrap = $('kpis');
   for (const m of METRICS) {
+    if (m.tile === false) continue;
     const el = document.createElement('div');
     el.className = 'kpi' + (m.primary ? ' primary' : '');
     el.id = 'k-' + m.key;
@@ -281,8 +287,11 @@ function settingChanges() {
 function deltaFor(m, cur, base) {
   if (!Number.isFinite(cur) || !Number.isFinite(base)) return null;
   const diff = cur - base;
-  const queue = m.key === 'rampQueue' || m.key === 'entryQueue';
-  const scale = Math.max(Math.abs(base), m.key === 'stopsPerVeh' ? 0.25 : queue ? 3 : 1e-6);
+  // Queues and waits often start near zero: show absolute changes for them,
+  // and ignore wobbles smaller than a few vehicles / seconds.
+  const queue = ['rampQueue', 'entryQueue', 'meanWaitS', 'meanRampWaitS'].includes(m.key);
+  const floor = m.key === 'stopsPerVeh' ? 0.25 : m.key === 'hardBrakePct' ? 0.5 : queue ? (m.unit === 's' ? 5 : 3) : 1e-6;
+  const scale = Math.max(Math.abs(base), floor);
   const rel = diff / scale;
   if (Math.abs(rel) < 0.03) return { text: '≈ same', cls: 'same' };
   const arrow = diff > 0 ? '▲' : '▼';
@@ -293,20 +302,42 @@ function deltaFor(m, cur, base) {
   return { text: txt, cls };
 }
 
+// Vehicles waiting to get onto the road (upstream entry queue + on-ramp).
+function queued(st) {
+  const e = Number.isFinite(st.entryQueue) ? st.entryQueue : 0;
+  return e + (Number.isFinite(st.rampQueue) ? st.rampQueue : 0);
+}
+
 function compareSentence(cur, base) {
+  // Travel time on the road, checked against the queues to get on: a change
+  // that speeds up the road by holding vehicles back (a ramp meter, demand
+  // spilling back upstream) must not be credited as a plain win. Queue LENGTH
+  // is used rather than the logged waits because it is current — waits are
+  // only reported once a vehicle finally gets on, so they lag a change.
+  const q0 = queued(base), q1 = queued(cur), dq = q1 - q0;
+  const qBig = Math.abs(dq) >= Math.max(5, 0.3 * q0);
+  const qTxt = !qBig ? '' : dq > 0
+    ? `, but ${Math.round(dq)} more vehicles are now waiting to get on (${Math.round(q0)} → ${Math.round(q1)})`
+    : `, and ${Math.round(-dq)} fewer vehicles are waiting to get on (${Math.round(q0)} → ${Math.round(q1)})`;
   const tt0 = base.meanTravelTimeS, tt1 = cur.meanTravelTimeS;
   if (Number.isFinite(tt0) && Number.isFinite(tt1) && tt0 > 0) {
     const d = (tt1 - tt0) / tt0;
-    if (Math.abs(d) < 0.03) return { level: 'same', text: `Trips take about the same time as the baseline (${tt0.toFixed(0)} s).` };
-    return { level: d < 0 ? 'better' : 'worse',
-      text: `Trips are ${Math.round(Math.abs(d) * 100)}% ${d < 0 ? 'faster' : 'slower'} than the baseline (${tt0.toFixed(0)} s → ${tt1.toFixed(0)} s).` };
+    const tLvl = Math.abs(d) < 0.03 ? 0 : d < 0 ? 1 : -1;
+    const qLvl = !qBig ? 0 : dq < 0 ? 1 : -1;
+    const level = tLvl + qLvl > 0 && tLvl >= 0 && qLvl >= 0 ? 'better'
+      : tLvl + qLvl < 0 && tLvl <= 0 && qLvl <= 0 ? 'worse' : 'same';
+    const head = tLvl === 0
+      ? `Trips on the road take about the same time as the baseline (${tt0.toFixed(0)} s)`
+      : `Trips on the road are ${Math.round(Math.abs(d) * 100)}% ${d < 0 ? 'faster' : 'slower'} than the baseline (${tt0.toFixed(0)} s → ${tt1.toFixed(0)} s)`;
+    const trade = tLvl !== 0 && qLvl !== 0 && tLvl !== qLvl ? ' A trade-off, not a free win.' : '';
+    return { level, text: head + qTxt + '.' + trade };
   }
   const v0 = base.avgSpeedMph, v1 = cur.avgSpeedMph;
   if (Number.isFinite(v0) && Number.isFinite(v1) && v0 > 0) {
     const d = (v1 - v0) / v0;
-    if (Math.abs(d) < 0.03) return { level: 'same', text: `Average speed is about the same as the baseline (${v0.toFixed(0)} mph).` };
+    if (Math.abs(d) < 0.03) return { level: 'same', text: `Average speed is about the same as the baseline (${v0.toFixed(0)} mph)${qTxt}.` };
     return { level: d > 0 ? 'better' : 'worse',
-      text: `Average speed is ${Math.round(Math.abs(d) * 100)}% ${d > 0 ? 'higher' : 'lower'} than the baseline (${v0.toFixed(0)} → ${v1.toFixed(0)} mph).` };
+      text: `Average speed is ${Math.round(Math.abs(d) * 100)}% ${d > 0 ? 'higher' : 'lower'} than the baseline (${v0.toFixed(0)} → ${v1.toFixed(0)} mph)${qTxt}.` };
   }
   return { level: 'same', text: 'Collecting data to compare…' };
 }
@@ -315,7 +346,7 @@ function compareSentence(cur, base) {
 const METRIC_BY_KEY = Object.fromEntries(METRICS.map(m => [m.key, m]));
 function compareFocus(keys, cur, base) {
   const parts = [];
-  let level = null;
+  const seen = new Set();
   for (const k of keys) {
     const m = METRIC_BY_KEY[k];
     if (!m) continue;
@@ -324,10 +355,12 @@ function compareFocus(keys, cur, base) {
     const dd = deltaFor(m, b, a);
     const unit = m.unit ? ' ' + m.unit : '';
     parts.push(`${m.label}: ${fmt(a, m.d)} → ${fmt(b, m.d)}${unit}` + (dd && dd.cls !== 'same' ? ` (${dd.text.replace(/[▲▼] /, b > a ? '+' : '−')})` : ''));
-    if (level === null && dd) level = dd.cls === 'better' ? 'better' : dd.cls === 'worse' ? 'worse' : 'same';
+    if (dd && (dd.cls === 'better' || dd.cls === 'worse')) seen.add(dd.cls);
   }
   if (!parts.length) return compareSentence(cur, base);
-  return { level: level || 'same', text: parts.join(' · ') };
+  // Mixed results (one focus metric better, another worse) are a trade-off.
+  const level = seen.size === 1 ? [...seen][0] : 'same';
+  return { level, text: parts.join(' · ') + (seen.size > 1 ? ' (a trade-off)' : '') };
 }
 
 let tsHover = null, fdHover = null;
@@ -357,6 +390,7 @@ function updateMetrics() {
   const settling = sim.time - lastChangeT < 60;
 
   for (const m of METRICS) {
+    if (m.tile === false) continue;
     const el = $('k-' + m.key);
     const show = (!m.scenario || (m.scenario === 'highway') === hwy) && s[m.key] !== undefined;
     el.hidden = !show;
@@ -495,13 +529,14 @@ function endExperiment() { exp = null; $('guide').hidden = true; }
 function updateGuide() {
   if (!exp) return;
   const since = sim.time - lastChangeT;
-  const warm = since >= WARMUP_S;
+  const W = exp.warmup || WARMUP_S;
+  const warm = since >= W;
   const anyBaselineDone = exp.steps.some((s, i) => s.baseline && stepDone.has(i));
   const prog = $('gProgress');
   if (!warm) {
     prog.hidden = false;
-    $('gBarFill').style.width = Math.min(100, since / WARMUP_S * 100) + '%';
-    $('gProgText').textContent = `${anyBaselineDone ? 'Settling after the change' : 'Warming up'}… ${Math.floor(since)} / ${WARMUP_S} s` +
+    $('gBarFill').style.width = Math.min(100, since / W * 100) + '%';
+    $('gProgText').textContent = `${anyBaselineDone ? 'Settling after the change' : 'Warming up'}… ${Math.floor(since)} / ${W} s` +
       (sim.timeScale < 4 ? ' (press 4 to fast-forward)' : '');
   } else {
     prog.hidden = true;
@@ -566,7 +601,8 @@ function updateInspector() {
   const lead = leaderInLane(car, car.lane, N);
   $('insGap').textContent = lead.lead ? fmt(lead.gap * 7.5, 0) + ' m' : 'open road';
   $('insHeadway').textContent = lead.lead && car.v > 0.05 ? fmt(lead.gap / car.v, 1) + ' s' : '–';
-  const rt = car.isAV ? 0 : (Number.isFinite(car.reactionTime) ? car.reactionTime : sim.reactionTime);
+  // Each human scales the global reaction-time slider by a personal factor.
+  const rt = car.isAV ? 0 : sim.reactionTime * (Number.isFinite(car.reactFactor) ? car.reactFactor : 1);
   $('insReact').textContent = car.isAV ? '≈0 s' : fmt(rt, 1) + ' s';
   $('insLane').textContent = cfg().hasRamp && car.lane === rampLaneIdx() ? 'Ramp' : 'Lane ' + (car.lane + 1);
   let st = car.distracted ? 'Distracted: not reacting'

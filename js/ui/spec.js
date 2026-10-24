@@ -32,12 +32,14 @@ const HWY = 'highway', CITY = 'city';
 // discharges at a saturation flow of ~1,800 veh/h of green.
 const FREEWAY_CAP = 2000, SAT_FLOW = 1800;
 
-// Defaults per scenario (mirrors the engine's own defaults in state.js).
+// Defaults per scenario (demand comes from the scenario config so the UI and
+// the engine agree on what "default" means).
 export function defaultsFor(scn) {
   const s = SCENARIOS[scn] || SCENARIOS.highway;
   return {
     lanes: s.defaultLanes, speedMph: s.defaultSpeed,
-    demandVph: scn === CITY ? 700 : 1500, rampDemandVph: 600,
+    demandVph: s.defaultDemandVph ?? (scn === CITY ? 450 : 1200),
+    rampDemandVph: s.defaultRampDemandVph ?? SCENARIOS.highway.defaultRampDemandVph ?? 500,
     exitRamp: false, exitPct: 20,
     reactionTime: 0.8, pctAgg: 15, pctPas: 15, pctDistracted: 0, pctAV: 0, pctTrucks: 10,
     mergeShape: 'taper', truckLaneRestriction: false,
@@ -128,7 +130,7 @@ export const CONTROLS = [
     options: () => [['taper', 'Short taper (~60 m)'], ['zipper', 'Zipper lane (~90 m)'], ['parallel', 'Long parallel (~135 m)']],
     fmt: v => ({ taper: 'Short taper', zipper: 'Zipper', parallel: 'Long parallel' })[v] || v,
     info: { what: 'Length of the acceleration lane where ramp traffic merges. Changing it restarts the run.',
-            why: 'A short taper forces drivers to merge early, slow and into whatever gap appears. A longer lane lets them match speed and "zipper" in, alternating with mainline cars, which keeps the merge smoother.' } },
+            why: 'On real freeways a longer lane lets ramp drivers match speed and "zipper" in, alternating with mainline cars. In this simulation drivers wait at the top of the ramp until a usable gap comes along, so the lane length changes little: mostly how far along the lane they merge.' } },
   { key: 'truckLaneRestriction', group: 'road', type: 'toggle', label: 'Keep trucks out of left lane',
     when: s => s.lanes >= 2, whyOff: 'Needs 2+ lanes',
     info: { what: 'Trucks may not use the leftmost (fast) lane.',
